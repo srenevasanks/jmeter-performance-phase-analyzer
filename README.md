@@ -5,7 +5,7 @@
 
 Analyze ramp-up, steady load, ramp-down and complete execution directly in Apache JMeter. The listener separates phase metrics, shows captured results live and produces a single offline HTML report or Excel workbook when requested.
 
-**Version 1.1.0 · Java 17 · Apache JMeter 5.6.3**
+**Version 1.1.1 · Java 17 · Apache JMeter 5.6.3**
 
 ## Why this exists
 
@@ -63,7 +63,7 @@ Partial includes unavailable native ramp-down phases and unresolved Arrivals/Ope
 
 ## Installation
 
-1. Download `jmeter-performance-phase-analyzer-1.1.0.jar` from [Releases](https://github.com/srenevasanks/jmeter-performance-phase-analyzer/releases).
+1. Download `jmeter-performance-phase-analyzer-1.1.1.jar` from [Releases](https://github.com/srenevasanks/jmeter-performance-phase-analyzer/releases).
 2. Close JMeter. Move any older version of this plugin outside `<JMETER_HOME>/lib/ext`.
 3. Copy the downloaded JAR into `<JMETER_HOME>/lib/ext/`. Keep exactly one version.
 4. Restart Apache JMeter 5.6.3 using Java 17.
@@ -103,6 +103,8 @@ HTML is one self-contained offline file with nine sections: Execution Summary, O
 
 Excel contains seven worksheets: Execution Summary, Ramp-up, Steady Load, Ramp-down, Complete Execution, Response Codes and Execution Configuration. HTML/Excel use the same snapshot calculations. Export the same capture cutoff when comparing populations.
 
+Version 1.1.1 includes the approved Excel redesign: structured execution information and KPIs, phase summaries, a native Average/P90/P95 comparison chart when data permits, readable configuration/windows, and formatted aggregate tables with filters and frozen identifiers. Counts, dates, durations and percentages retain their source meaning; unavailable data stays N/A. Internal UUIDs, schema fields and serialized objects are omitted from visible sheets. See [Excel verification and limitations](docs/EXCEL-REPORT.md).
+
 Suggested filenames use `<JMX_Name>_yyyy-MM-dd_HH-mm-ss.html` or `.xlsx`, based on the execution start in local time. Invalid filename characters are sanitized. Export avoids overwriting existing files. An unresolved JMX filename is shown as unavailable rather than invented. Only the selected export is written; internal capture data stays outside the report directory. Ordinary JMeter JTL files are unaffected.
 
 ## Build and test
@@ -115,7 +117,7 @@ cd jmeter-performance-phase-analyzer
 mvn --batch-mode --no-transfer-progress clean verify
 ```
 
-Artifact: `target/jmeter-performance-phase-analyzer-1.1.0.jar`. Tests use local samplers/embedded JMeter and do not require a separately installed JMeter or private mock service. GitHub Actions runs Java 17 with the same command. The repository excludes generated reports, raw JTL, binaries, local logs and development-only tooling.
+Artifact: `target/jmeter-performance-phase-analyzer-1.1.1.jar`. Tests use local samplers/embedded JMeter and do not require a separately installed JMeter or private mock service. GitHub Actions runs Java 17 with the same command. The repository excludes generated reports, raw JTL, binaries, local logs and development-only tooling.
 
 ## Known limitations
 

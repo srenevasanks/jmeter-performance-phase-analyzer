@@ -1,6 +1,6 @@
 # Validation scope
 
-The 1.1.0 native UI package passed 50 Java/Maven tests before publication preparation. The repository retains those tests; only a machine-specific test JMeter-home reference was replaced with a checked-in, attributed SaveService properties fixture. Production Java and report resources are unchanged from the verified package.
+The 1.1.0 native UI package passed 50 Java/Maven tests before publication preparation. The repository retains those tests; only a machine-specific test JMeter-home reference was replaced with a checked-in, attributed SaveService properties fixture. That publication preserved the verified production implementation. Version 1.1.1 adds the approved Excel-only redesign and focused tests; calculations, capture, detection, HTML and Swing remain unchanged. See [Excel verification](EXCEL-REPORT.md).
 
 Actual Apache JMeter 5.6.3 / Java 17 GUI tests used a six-user five-minute local run and a two-user ninety-second run. Ready/running/completed states, automatic/manual configuration, aggregate search/scrolling, native HTML/Excel Save dialogs, JMX save/reopen and capture stop/restart were exercised. Stop Capture left JMeter running; a new capture started separately.
 

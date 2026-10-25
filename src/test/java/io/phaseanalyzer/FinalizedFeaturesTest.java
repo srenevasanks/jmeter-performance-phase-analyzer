@@ -323,7 +323,7 @@ class FinalizedFeaturesTest {
               zip.getInputStream(zip.getEntry("xl/worksheets/sheet5.xml")).readAllBytes(),
               java.nio.charset.StandardCharsets.UTF_8);
       assertTrue(complete.contains("<v>200.0</v>"));
-      assertTrue(complete.contains(s.snapshotId()));
+      assertFalse(complete.contains(s.snapshotId()));
       assertFalse(complete.contains("<f>"));
     }
     assertEquals("Not configured", s.phase("Ramp-down").status());

@@ -1,5 +1,5 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
- <modelVersion>4.0.0</modelVersion><groupId>io.phaseanalyzer</groupId><artifactId>jmeter-performance-phase-analyzer</artifactId><version>1.1.0</version>
+ <modelVersion>4.0.0</modelVersion><groupId>io.phaseanalyzer</groupId><artifactId>jmeter-performance-phase-analyzer</artifactId><version>1.1.1</version>
  <name>JMeter Performance Phase Analyzer</name>
  <description>Phase-aware performance analysis and offline reporting for Apache JMeter.</description>
  <url>https://github.com/srenevasanks/jmeter-performance-phase-analyzer</url>
