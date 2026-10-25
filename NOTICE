@@ -1,0 +1,9 @@
+JMeter Performance Phase Analyzer
+Copyright 2026 srenevasanks
+
+This project includes src/test/resources/jmeter-home/bin/saveservice.properties
+from Apache JMeter 5.6.3, Copyright The Apache Software Foundation, licensed
+under Apache License 2.0. Its original license header is preserved.
+
+Apache JMeter is a trademark of The Apache Software Foundation. This project
+is independently maintained and is not an official Apache project.

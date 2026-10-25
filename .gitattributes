@@ -1,0 +1,6 @@
+* text=auto
+*.java text eol=lf
+*.xml text eol=lf
+*.jmx text eol=lf
+*.md text eol=lf
+*.png binary
