@@ -71,6 +71,16 @@ Partial includes unavailable native ramp-down phases and unresolved Arrivals/Ope
 
 JMeter supplies the provided JMeter/Jackson dependencies. Do not copy Maven dependency JARs into JMeter. Custom Thread Groups is optional and required only for its own workloads. No web server, browser UI or Excel installation is required by the listener. This plugin is **not yet submitted to JMeter Plugins Manager**.
 
+| Dependency | Required by | Installation |
+|---|---|---|
+| Java 17 | Plugin runtime | Run JMeter with a JDK/JRE 17. |
+| Apache JMeter 5.6.3 | Listener and sampling APIs | Use the complete official binary distribution. |
+| Jackson 2.16.1 | Snapshot/report serialization | Already shipped in stock JMeter 5.6.3; do not install another copy. |
+| Custom Thread Groups 3.1.1 | Ultimate, Stepping, Concurrency, Arrivals and Free-Form Arrivals workloads | Optional; install separately with its own declared dependencies. It is not needed for the analyzer or the local demo. |
+| Maven 3.9.x and JDK 17 | Building from source | Development only; not needed to install the release JAR. |
+
+The **downloaded release JAR** was installed and exercised in a checksum-verified clean JMeter distribution without Custom Thread Groups. See [clean installation evidence](docs/CLEAN-INSTALL-VERIFICATION.md).
+
 ## Quick start — no private service needed
 
 Open [examples/local-demo.jmx](examples/local-demo.jmx). It runs two users for four seconds with a Groovy sampler that waits 25 ms and returns a local success result. It makes no network requests and is demonstration data, not application performance.
