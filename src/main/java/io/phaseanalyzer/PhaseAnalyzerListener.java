@@ -24,6 +24,7 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
   private transient ExecutionEvidence evidence;
 
   public PhaseAnalyzerListener() {
+    installIdentitySync();
     setProperty("phase.id", UUID.randomUUID().toString());
     setProperty("phase.automatic", true);
     setProperty("phase.mode", "Requests");
@@ -31,6 +32,16 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
     setProperty("phase.hold", 60L);
     setProperty("phase.apdexT", 500L);
     setProperty("phase.apdexF", 2000L);
+  }
+
+  private static void installIdentitySync() {
+    // JMX deserialization can precede GuiPackage initialization. Register after
+    // loading as well, so Start works before the listener's GUI is ever opened.
+    if(org.apache.jmeter.gui.GuiPackage.getInstance()!=null)PlanIdentitySync.install();
+    else if(!java.awt.GraphicsEnvironment.isHeadless())
+      javax.swing.SwingUtilities.invokeLater(()->{
+        if(org.apache.jmeter.gui.GuiPackage.getInstance()!=null)PlanIdentitySync.install();
+      });
   }
 
   public RunSession session() {
@@ -156,6 +167,11 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
 
   private List<GroupDiscovery.Entry> readCatalog() {
     try {
+      // GUI Start synchronizes the edited in-memory plan before it is cloned.
+      // A saved JMX can be older than unsaved native GUI changes.
+      String guiCatalog=getPropertyAsString("phase.catalog");
+      if(org.apache.jmeter.gui.GuiPackage.getInstance()!=null&&!guiCatalog.isBlank())
+        return Reports.mapper().readValue(guiCatalog,new com.fasterxml.jackson.core.type.TypeReference<List<GroupDiscovery.Entry>>() {});
       var server = org.apache.jmeter.services.FileServer.getFileServer();
       String name = server.getScriptName();
       if (name != null && !name.isBlank()) {

@@ -1,21 +1,25 @@
-# Verified compatibility
+# Compatibility and evidence scope
 
-Verified environment: Apache JMeter 5.6.3, Java 17, Windows, optional Custom Thread Groups 3.1.1. Other JMeter/Java/OS versions are not claimed as tested.
+Verified baseline: Apache JMeter 5.6.3, Java 17, Windows; optional Custom Thread Groups 3.1.1. Other versions/platforms are not claimed as fully tested. **All nine implementations retain Partial overall validation status.** Passing scoped calculations or regression tests does not establish full certification.
 
-Nine independent full-profile local mock API runs produced 256,643 actual HTTP samples. Independent JTL comparisons found no statistical phase/aggregate metric discrepancies. Each HTML report passed offline browser controls/theme checks; each workbook had seven worksheets. These are plugin-validation results, not application-performance claims. Raw JTL/reports and machine-specific developer evidence are deliberately excluded from this repository.
+The published [sample report pairs](../examples/README.md) come from nine independent v1.1.1 local mock executions: 51,177 HTTP samples, 13,492 JTL/report comparisons and zero calculation discrepancies. All nine HTML reports passed offline browser controls/themes at 1366×768 and 1920×1080. All 63 worksheets and nine native charts were inspected in WPS. The older 256,643-sample batch is separate historical evidence and is not the population of the published examples.
 
-| Thread Group | Implementation provider | Result | Phase/load limitation |
-|---|---|---|---|
-| Standard | JMeter 5.6.3 | Partial | Ramp-up and hold; no native gradual ramp-down. |
-| Ultimate | Custom Thread Groups 3.1.1 | Passed | Three scheduled phases tested. |
-| Stepping | Custom Thread Groups 3.1.1 | Passed | Native stepped user profile tested. |
-| Concurrency | Custom Thread Groups 3.1.1 | Partial | Ramp-up and hold; no native gradual ramp-down. |
-| Arrivals | Custom Thread Groups 3.1.1 | Partial | No native gradual ramp-down. All 27,300 HTTP samples retained, but native evidence had 27,300 arrival facts and 27,298 completion facts, with terminal active-count difference two. |
-| Free-Form Arrivals | Custom Thread Groups 3.1.1 | Passed | Native arrival-rate schedule; arrivals are not concurrent users. |
-| Open Model | JMeter 5.6.3 | Partial | Statistical metrics matched; 11 active-worker observations differed. Observer reconstruction was also inconsistent, so exact active-user accuracy at those instants remains unverified. |
-| setUp | JMeter 5.6.3 | Partial | Actual lifecycle origin; no native gradual ramp-down. |
-| tearDown | JMeter 5.6.3 | Partial | Actual lifecycle origin; no native gradual ramp-down. |
+| Thread Group | Provider | Native gradual ramp-down in supplied plan | v1.1.2 evidence | Overall |
+|---|---|---|---|---|
+| Standard | JMeter 5.6.3 | Absent | New short API/report run: 225 samples; native clock/selection regression | Partial |
+| Ultimate | Custom Thread Groups 3.1.1 | Scheduled | New native clock/selection regression; prior API evidence reused | Partial |
+| Stepping | Custom Thread Groups 3.1.1 | Discrete steps | New native clock/selection regression; prior API evidence reused | Partial |
+| Concurrency | Custom Thread Groups 3.1.1 | Absent | New native clock/selection regression; prior API evidence reused | Partial |
+| Arrivals | Custom Thread Groups 3.1.1 | Absent | New native clock/selection regression; prior API evidence reused | Partial |
+| Free-Form Arrivals | Custom Thread Groups 3.1.1 | Decreasing arrival rate | New native clock/selection regression; prior API evidence reused | Partial |
+| Open Model | JMeter 5.6.3 | Decreasing arrival rate | New short API/report run: 210 samples; native clock/selection regression | Partial |
+| setUp | JMeter 5.6.3 | Absent | New short API/report run: 224 samples; native clock/selection regression | Partial |
+| tearDown | JMeter 5.6.3 | Absent | New native clock/selection regression; prior API evidence reused | Partial |
 
-Passed applies to the executed validation scenarios, not every possible schedule. Partial distinguishes native schedule/evidence limitations from statistical calculation errors. Unsupported or ambiguous schedules require explicit manual phases rather than invented durations. Open workloads use arrival-rate units; they do not promise a concurrency target.
+Native phases come from configuration, not observed load. Missing native ramp-down remains unavailable. Open groups use arrival-rate units; no concurrent-user target is fabricated. setUp/tearDown follow their native JMeter lifecycle.
 
-The subsequent native Swing UI revision preserved the calculation/report generator classes and passed the 50-test regression suite. It was exercised in actual JMeter with short local tests. Screenshot provenance and UI limits are documented in VALIDATION.md.
+Targeted patch checks independently reconciled 659 actual samples and 2,432 report/timeline checks with zero calculation differences. All 72 live completed-window rate readings matched JTL completion timestamps. First-observed native clock anchors matched; Standard/setUp worker clocks varied by 2–3 ms. Open Model had two native-versus-listener user observations differing by one worker at distinct sample/callback instants. Exact continuous active-worker agreement remains unverified. Historical Arrivals evidence also contained a native arrival/completion-fact discrepancy despite preserving all actual HTTP samples.
+
+Final interactive checks of corrected GUI Start/Save switching, save/reopen and completed-state rendering are still pending after computer-use activation/capture failed. The real native editor commit regression passes; final successful interactive execution was not recorded. Arbitrary complex/multiple-row schedules, dynamic changes, distributed execution and every duplicate-name edge case are not exhaustively certified. Unsupported/ambiguous schedules are disclosed or require explicit manual analytical windows.
+
+See [validation details](VALIDATION.md) and [native configuration screenshots](../screenshots/README.md). A Partial result is not a claim that calculations failed, nor permission to invent unavailable phases.

@@ -25,6 +25,7 @@ public final class RunSession {
   public final Map<String, Group> groups = new ConcurrentHashMap<>();
   public final List<String> warnings = new CopyOnWriteArrayList<>();
   public final AtomicLong dropped = new AtomicLong();
+  final LiveThroughput liveThroughput = new LiveThroughput();
   private final Set<String> nativeAnchored = ConcurrentHashMap.newKeySet();
   private final Map<String, Long> observedStarts = new ConcurrentHashMap<>();
 
@@ -196,7 +197,7 @@ public final class RunSession {
         warning(
             "Collection queue overflow or late event: reports are incomplete; increase storage"
                 + " throughput or reduce load.");
-      }
+      } else liveThroughput.record(s,System.currentTimeMillis());
     }
   }
 

@@ -197,9 +197,41 @@ class JMeterIntegrationTest {
 
   public static class RealSampler extends AbstractSampler {
     private static final long serialVersionUID = 1L;
+    static final Map<String,Long> nativeClocks=new java.util.concurrent.ConcurrentHashMap<>();
+    static final List<Map<String,Object>> clockEvidence=new java.util.concurrent.CopyOnWriteArrayList<>();
+    // Independent probe of installed native state, not RuntimeScheduleOrigin or ScheduleAdapters.
+    static Object nativeField(Object value,String name)throws Exception {
+      for(Class<?> c=value.getClass();c!=null;c=c.getSuperclass())try {
+        var f=c.getDeclaredField(name);f.setAccessible(true);return f.get(value);
+      }catch(NoSuchFieldException ignored){}
+      throw new NoSuchFieldException(name);
+    }
+    static void clockProbe() {
+      var ctx=org.apache.jmeter.threads.JMeterContextService.getContext();var g=ctx.getThreadGroup();
+      if(g==null||nativeClocks.containsKey(GroupDiscovery.key(g)))return;
+      try {
+        long epoch;
+        if(g instanceof org.apache.jmeter.threads.ThreadGroup s)
+          epoch=ctx.getThread().getEndTime()-(s.getDuration()+s.getDelay())*1000;
+        else if(g instanceof kg.apc.jmeter.threads.UltimateThreadGroup u) {
+          var row=(org.apache.jmeter.testelement.property.CollectionProperty)((org.apache.jmeter.testelement.property.CollectionProperty)u.getData()).get(0);
+          long users=row.get(0).getLongValue(),delay=row.get(1).getLongValue()*1000,ramp=row.get(2).getLongValue()*1000;
+          epoch=ctx.getThread().getStartTime()-delay-ramp*(users-ctx.getThreadNum())/users;
+        } else if(g instanceof kg.apc.jmeter.threads.SteppingThreadGroup s) {
+          // This test's native fixture has one user per bucket and one-second ramps.
+          assertEquals(1,s.getInUserCountAsInt());assertEquals(1,s.getRampUpAsInt());
+          epoch=ctx.getThread().getStartTime()-s.getThreadGroupDelayAsInt()*1000L-ctx.getThreadNum()*1000L;
+        }
+        else if(g instanceof org.apache.jmeter.threads.openmodel.OpenModelThreadGroup)
+          epoch=org.apache.jmeter.threads.JMeterContextService.getTestStartTime();
+        else {double raw=((Number)nativeField(nativeField(g,"threadStarter"),"startTime")).doubleValue();epoch=Math.round(raw*(g.getClass().getName().contains(".arrivals.")?1000:1));}
+        if(epoch>0)nativeClocks.putIfAbsent(GroupDiscovery.key(g),epoch);
+      }catch(Exception failure){throw new AssertionError("Independent native clock unavailable for "+g.getClass(),failure);}
+    }
 
     @Override
     public SampleResult sample(Entry entry) {
+      clockProbe();
       SampleResult r = new SampleResult();
       r.setSampleLabel(getName());
       r.sampleStart();
@@ -255,6 +287,7 @@ class JMeterIntegrationTest {
     }
     StandardJMeterEngine engine = new StandardJMeterEngine();
     engine.configure(tree);
+    RealSampler.nativeClocks.clear();
     engine.runTest();
     if (interrupt) {
       Thread.sleep(700);
@@ -269,6 +302,13 @@ class JMeterIntegrationTest {
             Thread.sleep(50);
         });
     RunSession run = listener.session();
+    for(var entry:run.groups.entrySet()) {
+      Long nativeEpoch=RealSampler.nativeClocks.get(entry.getKey());
+      assertNotNull(nativeEpoch,"Independent sampler-clock evidence");
+      assertEquals(nativeEpoch.longValue(),entry.getValue().origin(),"Phase epoch must match native scheduler state");
+      RealSampler.clockEvidence.add(Map.of("group",entry.getKey(),"implementation",entry.getValue().className(),"nativeEpoch",nativeEpoch,"pluginEpoch",entry.getValue().origin(),"match",true));
+    }
+    Reports.mapper().writerWithDefaultPrettyPrinter().writeValue(Path.of("target/native-clock-evidence.json").toFile(),RealSampler.clockEvidence);
     Reports.exportSnapshot(ReportSnapshot.build(listener, run), run.directory);
     assertTrue(run.store.count > 0);
     assertEquals(0, run.dropped.get());
@@ -304,6 +344,15 @@ class JMeterIntegrationTest {
     RunSession r = execute(List.of(g), false, false);
     assertEquals(
         "Ultimate 3.1.1 discrete combined rows", r.groups.get("Ultimate").schedule().method());
+  }
+
+  @Test void setupNativeClock() throws Exception {
+    var g=new org.apache.jmeter.threads.SetupThreadGroup();g.setName("setUp clock");g.setNumThreads(2);g.setRampUp(1);g.setScheduler(true);g.setDuration(3);
+    var loop=new LoopController();loop.setLoops(-1);g.setSamplerController(loop);execute(List.of(g),false,false);
+  }
+  @Test void teardownNativeClock() throws Exception {
+    var g=new org.apache.jmeter.threads.PostThreadGroup();g.setName("tearDown clock");g.setNumThreads(2);g.setRampUp(1);g.setScheduler(true);g.setDuration(3);
+    var loop=new LoopController();loop.setLoops(-1);g.setSamplerController(loop);execute(List.of(g),false,false);
   }
 
   @Test

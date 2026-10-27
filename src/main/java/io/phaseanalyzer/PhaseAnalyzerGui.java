@@ -73,6 +73,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   private final AtomicBoolean exporting = new AtomicBoolean();
   private long lastUnits = 1;
   private String renderedRunId = "";
+  private long selectionRevision;
   private final JPanel tableCards = new JPanel(new CardLayout());
 
 
@@ -84,6 +85,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   }
 
   public PhaseAnalyzerGui() {
+    if(GuiPackage.getInstance()!=null)PlanIdentitySync.install();
     setLayout(new BorderLayout(8, 8));
     setBorder(makeBorder());
     add(makeTitlePanel(), BorderLayout.NORTH);
@@ -130,7 +132,14 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     filter.getDocument().addDocumentListener(change(this::filterRows));
     group.addActionListener(
         e -> {
-          if (!filling) updateConfiguration();
+          if (!filling) {
+            if(element!=null)element.setProperty("phase.group",selectedKey());
+            selectionRevision++;
+            snapshot=null;
+            graph.setSnapshot(null);renderDashboard();renderTable();
+            updateConfiguration();
+            if(element!=null&&element.session()!=null)requestSnapshot();
+          }
         });
     html.addActionListener(e -> export("html"));
     excel.addActionListener(e -> export("xlsx"));
@@ -191,7 +200,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     JPanel strip=new JPanel(new BorderLayout(6,4));
     if(live){strip.add(liveStatus);return strip;}
     JPanel cells=new JPanel(new GridLayout(2,3,12,5));
-    String[] names={"Capture status", "Thread Group", "Current phase", "Elapsed time", "Active users", "Requests / sec"};
+    String[] names={"Capture status", "Thread Group", "Current phase", "Elapsed time", "Active users", "Current throughput"};
     JLabel[] values={header,groupStatus,phaseStatus,elapsedStatus,activeStatus,rateStatus};
     for(int i=0;i<names.length;i++) {JPanel pair=new JPanel(new BorderLayout(6,0));pair.add(new JLabel(names[i]+":"),BorderLayout.WEST);pair.add(values[i]);cells.add(pair);}
     strip.add(cells);strip.add(capture,BorderLayout.EAST);return strip;
@@ -338,8 +347,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     if (!a.isBlank() || !b.isBlank())
       new Window("Steady load", Long.parseLong(a), Long.parseLong(b));
     Choice c = (Choice) group.getSelectedItem();
-    if (c != null && !c.enabled())
-      throw new IllegalArgumentException("Selected Thread Group is disabled");
+    // A disabled selection is a valid saved-plan state, not a GUI save error.
     p.setProperty("phase.automatic", automatic.isSelected());
     p.setProperty("phase.strict", strict.isSelected());
     p.setProperty("phase.delay", delay);
@@ -449,28 +457,16 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
       discovering.set(false);
       return;
     }
-    HashTree tree = gui.getTreeModel().getTestPlan();
-    new SwingWorker<List<GroupDiscovery.Entry>, Void>() {
-      protected List<GroupDiscovery.Entry> doInBackground() {
-        return GroupDiscovery.scan(tree);
-      }
-
-      protected void done() {
-        try {
-          setDiscovered(get());
-        } catch (Exception e) {
-          error(e);
-        } finally {
-          discovering.set(false);
-        }
-      }
-    }.execute();
+    // Swing tree nodes and identity properties must only be read/mutated on EDT.
+    try {setDiscovered(PlanIdentitySync.synchronize(gui.getTreeModel().getTestPlan()));}
+    catch(Exception e){error(e);}
+    finally{discovering.set(false);}
   }
 
   void setDiscovered(List<GroupDiscovery.Entry> entries) {
     String previous =
         element == null ? selectedKey() : element.getPropertyAsString("phase.group", selectedKey());
-    if (discovered.equals(entries)) return;
+    if (discovered.equals(entries)&&previous.equals(selectedKey())) return;
     discovered = entries;
     filling = true;
     group.removeAllItems();
@@ -479,11 +475,22 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     if (enabled.size() > 1)
       group.addItem(new Choice("All", "All Thread Groups — common steady window", true));
     for (var e : entries) group.addItem(new Choice(e.key(), e.toString(), e.enabled()));
-    String desired = entries.stream().anyMatch(e->e.key().equals(previous)) ? previous : enabled.size() == 1 ? enabled.get(0).key() : previous;
+    String desired=previous.equals("All")&&enabled.size()==1?enabled.get(0).key():previous;
+    if(previous.equals("All")&&enabled.size()<=1)group.insertItemAt(new Choice("All","All Thread Groups",true),0);
+    if(!desired.equals("All")&&entries.stream().noneMatch(e->e.key().equals(desired)))
+      group.addItem(new Choice(desired,"Selected Thread Group unavailable (deleted or replaced)",false));
     for (int i = 0; i < group.getItemCount(); i++)
       if (group.getItemAt(i).key().equals(desired))
         group.setSelectedIndex(i);
     filling = false;
+    if(element!=null) {
+      element.setProperty("phase.group",selectedKey());
+      try {element.setProperty("phase.catalog",Reports.mapper().writeValueAsString(entries));}
+      catch(Exception e){error(e);}
+    }
+    snapshot=null;
+    selectionRevision++;
+    graph.setSnapshot(null);renderDashboard();renderTable();
     updateConfiguration();
   }
 
@@ -582,7 +589,9 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   private void requestSnapshot() {
     if (element == null || element.session() == null || !busy.compareAndSet(false, true)) return;
     PhaseAnalyzerListener cfg = (PhaseAnalyzerListener) element.clone();
+    cfg.setProperty("phase.group",selectedKey());
     RunSession run = element.session();
+    long requestedRevision=selectionRevision;
     new SwingWorker<ReportSnapshot, Void>() {
       protected ReportSnapshot doInBackground() throws Exception {
         return ReportSnapshot.build(cfg, run);
@@ -590,7 +599,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
 
       protected void done() {
         try {
-          if (element != null && element.session() == run) {
+          if (element != null && element.session() == run && requestedRevision==selectionRevision) {
             snapshot = get();
             renderDashboard();
             renderTable();
@@ -618,6 +627,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
         } finally {
           busy.set(false);
           clock();
+          if(element!=null&&element.session()==run&&requestedRevision!=selectionRevision)requestSnapshot();
         }
       }
     }.execute();
@@ -627,19 +637,22 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     RunSession run=element==null?null:element.session();
     capture.setVisible(run!=null && element.testRunning());
     capture.setEnabled(run!=null && element.testRunning());
-    if(run==null){header.setText("Ready");groupStatus.setText(shortGroup());phaseStatus.setText("Not started");elapsedStatus.setText("—");activeStatus.setText("— users");rateStatus.setText("— req/s");liveStatus.setText("Ready · Run JMeter to begin capture and view live metrics");progress.setValue(0);progress.setString("Ready to capture");status.setText("No execution data yet. Select a Thread Group, then start JMeter.");html.setEnabled(false);excel.setEnabled(false);return;}
+    if(run==null){header.setText("Ready");groupStatus.setText(shortGroup());phaseStatus.setText("Not started");elapsedStatus.setText("—");activeStatus.setText("— users");rateStatus.setText("— samples/sec");liveStatus.setText("Ready · Run JMeter to begin capture and view live metrics");progress.setValue(0);progress.setString("Ready to capture");status.setText("No execution data yet. Select a Thread Group, then start JMeter.");html.setEnabled(false);excel.setEnabled(false);return;}
     String runId=Long.toString(run.start);
     if(!renderedRunId.equals(runId)){renderedRunId=runId;snapshot=null;graph.setSnapshot(null);renderDashboard();renderTable();html.setEnabled(false);excel.setEnabled(false);}
     long end=run.end==0?System.currentTimeMillis():run.end;
     header.setText(run.captureStatus);
     groupStatus.setText(shortGroup());groupStatus.setToolTipText(Objects.toString(group.getSelectedItem()));phaseStatus.setText(run.end>0?run.captureStatus:currentPhase(end));elapsedStatus.setText(time((end-run.start)/1000));
     capture.setText(run.isCapturing()?"Stop Capture":"Start New Capture");
-    String active="—",rate="—";if(snapshot!=null&&!snapshot.timeline().isEmpty()){var point=snapshot.timeline().get(snapshot.timeline().size()-1);active=display(point.active());rate=display(point.durationSeconds()>0?point.samples()/point.durationSeconds():null);}
+    String active="—";if(snapshot!=null&&!snapshot.timeline().isEmpty()){var point=snapshot.timeline().get(snapshot.timeline().size()-1);active=display(point.active());}
+    Double liveRate=run.liveThroughput.rate(selectedKey(),element.getPropertyAsString("phase.mode","Requests"),run.start,end);
+    String rate=liveRate==null?"Warming up":display(liveRate);
+    rateStatus.setToolTipText("Completion rate over up to five completed one-second intervals; partial buckets excluded. Frozen at capture end. Overall throughput is shown in the KPI cards.");
     Integer workers=run.isCapturing()?element.observedUsers(selectedKey()):null;
     if(workers!=null)active=display(workers);
-    if(!element.testRunning() && run.end>0){active="0";rate="—";}
-    activeStatus.setText(active+" users");rateStatus.setText(rate+" req/s");
-    liveStatus.setText(run.captureStatus+"  ·  "+time((end-run.start)/1000)+"  ·  "+(run.isCapturing()?currentPhase(end):run.captureStatus)+"  ·  "+active+" active users  ·  "+rate+" req/s");
+    if(!element.testRunning() && run.end>0)active="0";
+    activeStatus.setText(active+" users");rateStatus.setText(liveRate==null?rate:rate+" samples/sec");
+    liveStatus.setText(run.captureStatus+"  ·  "+time((end-run.start)/1000)+"  ·  "+(run.isCapturing()?currentPhase(end):run.captureStatus)+"  ·  "+active+" active users  ·  "+rate+(liveRate==null?"":" samples/sec (completed intervals)"));
   }
   private String shortGroup(){Choice c=(Choice)group.getSelectedItem();String name=discovered.stream().filter(e->c!=null&&e.key().equals(c.key())).map(GroupDiscovery.Entry::name).findFirst().orElse("Select a group");return name.length()>23?name.substring(0,21)+"…":name;}
   private static String time(long seconds){return String.format(Locale.ROOT,"%02d:%02d:%02d",seconds/3600,(seconds/60)%60,seconds%60);}

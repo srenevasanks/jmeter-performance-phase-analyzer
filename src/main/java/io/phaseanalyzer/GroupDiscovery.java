@@ -25,13 +25,44 @@ public final class GroupDiscovery {
 
   private GroupDiscovery() {}
 
+  // Native editors call TestElement.clear(). Keep identity outside mutable properties,
+  // using weak identity (not TestElement.equals/hashCode, which change with properties).
+  private static final java.lang.ref.ReferenceQueue<Object> identityQueue = new java.lang.ref.ReferenceQueue<>();
+  private static final Map<IdentityRef, String> identities = new HashMap<>();
+  private static final Map<IdentityRef, Map<String,IdentityRef>> owners = new HashMap<>();
+  private static final class IdentityRef extends java.lang.ref.WeakReference<Object> {
+    private final int hash;
+    IdentityRef(Object value) { super(value, identityQueue); hash=System.identityHashCode(value); }
+    @Override public int hashCode() { return hash; }
+    @Override public boolean equals(Object other) { return this==other || other instanceof IdentityRef r && get()!=null && get()==r.get(); }
+  }
+  private static synchronized String identity(Object node, AbstractThreadGroup group, List<Entry> entries,Object scope) {
+    java.lang.ref.Reference<?> dead;
+    while ((dead=identityQueue.poll())!=null) {identities.remove(dead);owners.remove(dead);}
+    IdentityRef ref=new IdentityRef(node);
+    String id=identities.getOrDefault(ref,group.getPropertyAsString("phase.identity"));
+    String candidate=id;
+    var plan=owners.computeIfAbsent(new IdentityRef(scope),s->new HashMap<>());
+    IdentityRef owner=plan.get(id);
+    if(id.isBlank() || owner!=null&&owner.get()!=null&&owner.get()!=node || entries.stream().anyMatch(e->e.key().equals("tg:"+candidate))) id=UUID.randomUUID().toString();
+    identities.put(ref,id);
+    plan.put(id,ref);
+    group.setProperty("phase.identity",id);
+    return id;
+  }
+
   public static List<Entry> scan(HashTree tree) {
     return scan(tree, true);
   }
 
   public static List<Entry> scan(HashTree tree, boolean assignIdentity) {
     List<Entry> entries = new ArrayList<>();
-    walk(tree, true, entries, assignIdentity);
+    Object scope=tree;
+    for(Object node:tree.list()) {
+      Object value=node instanceof JMeterTreeNode n?n.getTestElement():node;
+      if(value instanceof org.apache.jmeter.testelement.TestPlan){scope=node;break;}
+    }
+    walk(tree, true, entries, assignIdentity,scope);
     Map<String, Long> names = new HashMap<>();
     for (var e : entries) names.merge(e.name(), 1L, Long::sum);
     return entries.stream()
@@ -55,18 +86,14 @@ public final class GroupDiscovery {
   }
 
   private static void walk(
-      HashTree tree, boolean parentEnabled, List<Entry> result, boolean assignIdentity) {
+      HashTree tree, boolean parentEnabled, List<Entry> result, boolean assignIdentity,Object scope) {
     for (Object node : tree.list()) {
       Object value = node instanceof JMeterTreeNode n ? n.getTestElement() : node;
       boolean enabled = parentEnabled;
       if (value instanceof TestElement te) enabled &= te.isEnabled();
       if (value instanceof AbstractThreadGroup g) {
         String id = g.getPropertyAsString("phase.identity");
-        if (assignIdentity
-            && (id.isBlank() || result.stream().map(Entry::key).toList().contains("tg:" + id))) {
-          id = UUID.randomUUID().toString();
-          g.setProperty("phase.identity", id);
-        }
+        if (assignIdentity) id=identity(node,g,result,scope);
         String key =
             assignIdentity
                 ? "tg:" + id
@@ -100,7 +127,7 @@ public final class GroupDiscovery {
                 p));
       }
       HashTree children = tree.getTree(node);
-      if (children != null) walk(children, enabled, result, assignIdentity);
+      if (children != null) walk(children, enabled, result, assignIdentity,scope);
     }
   }
 
