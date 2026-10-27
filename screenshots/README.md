@@ -44,3 +44,7 @@ The Manual image is an **unapplied analytical preview**, not proof of a Standard
 | [excel-report/06-response-codes.png](excel-report/06-response-codes.png) | `02-Ultimate/screenshots/excel-06-response-codes.png` |
 | [excel-report/07-execution-configuration.png](excel-report/07-execution-configuration.png) | `02-Ultimate/screenshots/excel-07-execution-configuration.png` |
 | [excel-report/08-summary-chart.png](excel-report/08-summary-chart.png) | `02-Ultimate/screenshots/excel-08-summary-chart.png` |
+
+## Complete validation evidence
+
+The 36-image curated gallery above is preserved. Browse the [252 original captures across all nine Thread Groups](validation/README.md) for every available native configuration, listener, HTML and Excel view. Original full captures retain original filenames and bytes; their title bars may show historical local validation paths. Overall compatibility remains Partial.
