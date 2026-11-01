@@ -9,7 +9,11 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7.0.1
@@ -22,6 +26,6 @@ jobs:
         run: mvn --batch-mode --no-transfer-progress clean verify
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: plugin-jar
+          name: plugin-jar-${{ matrix.os }}
           path: target/jmeter-performance-phase-analyzer-*.jar
           if-no-files-found: error

@@ -62,6 +62,7 @@ public final class GroupDiscovery {
       Object value=node instanceof JMeterTreeNode n?n.getTestElement():node;
       if(value instanceof org.apache.jmeter.testelement.TestPlan){scope=node;break;}
     }
+    if(assignIdentity)restoreLoadedIdentities(tree,scope);
     walk(tree, true, entries, assignIdentity,scope);
     Map<String, Long> names = new HashMap<>();
     for (var e : entries) names.merge(e.name(), 1L, Long::sum);
@@ -85,9 +86,37 @@ public final class GroupDiscovery {
         .toList();
   }
 
+  private static synchronized void restoreLoadedIdentities(HashTree tree,Object scope){
+    if(owners.containsKey(new IdentityRef(scope)))return; // Never resurrect a deleted in-memory node.
+    List<AbstractThreadGroup> groups=new ArrayList<>();List<String> catalogs=new ArrayList<>();
+    collectSaved(tree,groups,catalogs);
+    for(String catalog:catalogs)try{
+      var saved=Reports.mapper().readTree(catalog);
+      for(int i=0;i<Math.min(groups.size(),saved.size());i++){
+        var group=groups.get(i);var entry=saved.get(i);String key=entry.path("key").asText();
+        if(group.getPropertyAsString("phase.identity").isBlank()&&key.startsWith("tg:")&&entry.path("name").asText().equals(group.getName())&&entry.path("implementation").asText().equals(group.getClass().getName())){
+          group.setProperty("phase.identity",key.substring(3));group.setProperty("phase.analysisKey",key);
+        }
+      }
+      if(!saved.isEmpty())break;
+    }catch(Exception invalid){/* Invalid legacy catalogs do not create identities. */}
+  }
+  private static void collectSaved(HashTree tree,List<AbstractThreadGroup> groups,List<String> catalogs){
+    List<Object> nodes=new ArrayList<>(tree.list());
+    nodes.sort((a,b)->a instanceof JMeterTreeNode x&&b instanceof JMeterTreeNode y&&x.getParent()!=null&&x.getParent()==y.getParent()?Integer.compare(x.getParent().getIndex(x),y.getParent().getIndex(y)):0);
+    for(Object node:nodes){Object value=node instanceof JMeterTreeNode n?n.getTestElement():node;
+      if(value instanceof AbstractThreadGroup group)groups.add(group);
+      if(value instanceof PhaseAnalyzerListener listener&&!listener.getPropertyAsString("phase.catalog").isBlank())catalogs.add(listener.getPropertyAsString("phase.catalog"));
+      HashTree children=tree.getTree(node);if(children!=null)collectSaved(children,groups,catalogs);
+    }
+  }
+
   private static void walk(
       HashTree tree, boolean parentEnabled, List<Entry> result, boolean assignIdentity,Object scope) {
-    for (Object node : tree.list()) {
+    List<Object> nodes=new ArrayList<>(tree.list());
+    nodes.sort((a,b)->a instanceof JMeterTreeNode x && b instanceof JMeterTreeNode y && x.getParent()!=null && x.getParent()==y.getParent()
+      ?Integer.compare(x.getParent().getIndex(x),y.getParent().getIndex(y)):0);
+    for (Object node : nodes) {
       Object value = node instanceof JMeterTreeNode n ? n.getTestElement() : node;
       boolean enabled = parentEnabled;
       if (value instanceof TestElement te) enabled &= te.isEnabled();

@@ -45,16 +45,19 @@ public record ReportSnapshot(
 
   public static ReportSnapshot build(PhaseAnalyzerListener config, RunSession run)
       throws IOException {
+    if(run.hasFrozenConfiguration()&&config.getPropertyAsString("phase.group","All").equals("All"))
+      return ExecutionViews.build(config,run).selected();
     RunSession.CaptureCopy copy = run.copy();
     try {
-      return build(config, run, copy);
+      String key=config.getPropertyAsString("phase.group","All");if(key.isBlank())key="All";
+      return build(run.analysisConfiguration(config,key), run, copy);
     } finally {
       Files.deleteIfExists(copy.samples());
       Files.deleteIfExists(copy.load());
     }
   }
 
-  private static ReportSnapshot build(
+  static ReportSnapshot build(
       PhaseAnalyzerListener config, RunSession run, RunSession.CaptureCopy copy)
       throws IOException {
     Path samples = copy.samples();
@@ -62,9 +65,17 @@ public record ReportSnapshot(
         begin = Math.min(run.start, copy.first() == Long.MAX_VALUE ? run.start : copy.first());
     String selected = config.getPropertyAsString("phase.group", "All"),
         kind = config.getPropertyAsString("phase.mode", "Requests");
+    if(selected.isBlank())selected="All";
+    final String selectedGroup=selected;
+    if(!selected.equals("All")&&run.groupEnd(selected)>0)cut=Math.min(cut,run.groupEnd(selected));
+    if(!selected.equals("All")&&run.hasFrozenConfiguration()&&run.participated(selected)){
+      RunSession.Group nativeGroup=copy.groups().get(selected);
+      begin=Math.max(begin,nativeGroup==null?run.groupStart(selected):nativeGroup.origin());
+      cut=Math.max(begin,cut);
+    }
     List<RunSession.Group> groups =
         copy.groups().values().stream()
-            .filter(g -> selected.equals("All") || selected.equals(g.name()))
+            .filter(g -> selectedGroup.equals("All") || selectedGroup.equals(g.name()))
             .sorted(Comparator.comparing(RunSession.Group::name))
             .toList();
     Map<String, Object> metadata = new LinkedHashMap<>(config.metadata(run));
@@ -72,12 +83,13 @@ public record ReportSnapshot(
     Map<String, List<Window>> configured = new LinkedHashMap<>();
     for (String phase : PHASES) configured.put(phase, new ArrayList<>());
     boolean automatic = config.getPropertyAsBoolean("phase.automatic", true);
+    long manualOrigin=run.hasFrozenConfiguration()&&!selected.equals("All")&&!groups.isEmpty()?groups.get(0).origin():run.testStart;
     String unsupported = "";
     if (!automatic) {
       Schedule manual =
           Schedule.phases(
               ms(config, "delay"), ms(config, "up"), ms(config, "hold"), ms(config, "down"));
-      for (Window w : manual.windows(run.testStart))
+      for (Window w : manual.windows(manualOrigin))
         if (w.end() > w.start()) configured.get(w.phase()).add(w);
       metadata.remove("manualSchedule");
     } else if (groups.isEmpty()) {
@@ -162,7 +174,7 @@ public record ReportSnapshot(
     if (automatic && groups.stream().anyMatch(g -> g.schedule() == null)) expectedEnd = 0;
     if (!automatic)
       expectedEnd =
-          run.testStart
+          manualOrigin
               + ms(config, "delay")
               + ms(config, "up")
               + ms(config, "hold")
@@ -206,6 +218,11 @@ public record ReportSnapshot(
     if (state.equals("Running")) state = "Partial Report";
     else if (state.equals("Completed")) state = run.testOutcome;
     metadata.put("executionStatus", state);
+    if(run.hasFrozenConfiguration()&&!selected.equals("All")){
+      state=run.groupStatus(selected);
+      metadata.put("executionStatus",state);
+      metadata.put("groupExecutionStart",run.groupStart(selected));
+    }
     metadata.put("executionStart", begin);
     metadata.put("executionEnd", cut);
     metadata.put("testPlan", run.jmxFilename);
@@ -214,7 +231,7 @@ public record ReportSnapshot(
         automatic ? "Automatic — configuration" : "Manual — explicit time windows");
     metadata.put("selectedThreadGroup", selected);
     metadata.put("capturedSamples", copy.count());
-    metadata.put("groups", copy.groups().values());
+    metadata.put("groups", groups);
     metadata.put(
         "population",
         kind.equals("Separate")
@@ -247,6 +264,7 @@ public record ReportSnapshot(
         warnings.add("Saved discovery metadata invalid: " + e.getMessage());
       }
     metadata.put("warnings", warnings.stream().distinct().toList());
+    if(!selected.equals("All"))metadata.putIfAbsent("selectedThreadGroupLabel",run.displayName(selected));
     List<Expected> expected = new ArrayList<>();
     if (automatic && !groups.isEmpty() && groups.stream().allMatch(g -> g.schedule() != null)) {
       Set<String> units = new HashSet<>();

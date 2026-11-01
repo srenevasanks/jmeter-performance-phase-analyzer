@@ -32,6 +32,15 @@ public final class TrendPanel extends JPanel {
     new Color(104, 123, 142)
   };
   private ReportSnapshot snapshot;
+  private Map<String,ReportSnapshot> groupSnapshots=Map.of();
+  private final Map<String,Color> groupColors=new LinkedHashMap<>();
+  public void setGroupSnapshots(Map<String,ReportSnapshot> groups){
+    groupSnapshots=new LinkedHashMap<>(groups);
+    for(String key:groups.keySet())groupColors.computeIfAbsent(key,k->{int n=groupColors.size();return n<COLORS.length?COLORS[n]:Color.getHSBColor((n*.61803398875f)%1,.65f,.8f);});
+    resizeGraph();repaint();
+  }
+  private void resizeGraph(){setPreferredSize(new Dimension(800,(snapshot==null?105:!groupSnapshots.isEmpty()&&metric.equals("All Metrics")?500:250)+(actual&&snapshot!=null?115:0)));revalidate();}
+  private int plotHeight(){return Math.max(1,super.getHeight()-(actual&&snapshot!=null?115:0));}
   private Schedule preview;
   private String metric = "Throughput";
   private boolean actual;
@@ -74,7 +83,8 @@ public final class TrendPanel extends JPanel {
 
   public void setSnapshot(ReportSnapshot value) {
     snapshot = value;
-    setPreferredSize(new Dimension(800,value==null?105:205));
+    if(value==null)groupSnapshots=Map.of();
+    resizeGraph();
     revalidate();
     preview = null;
     repaint();
@@ -88,12 +98,13 @@ public final class TrendPanel extends JPanel {
 
   public void setMetric(String value) {
     metric = value;
+    resizeGraph();
     repaint();
   }
 
   public void setActual(boolean value) {
     actual = value;
-    repaint();
+    resizeGraph();repaint();
   }
 
   private long first() {
@@ -134,14 +145,6 @@ public final class TrendPanel extends JPanel {
                   snapshot.timeline().stream().map(Timeline.Point::time).toList(),
                   snapshot.timeline().stream().map(p -> value(p, index)).toList()));
         }
-      if (actual && snapshot.expected().stream().allMatch(p -> p.unit().equals("users")))
-        lines.add(
-            new Line(
-                "Observed users",
-                "users",
-                7,
-                snapshot.timeline().stream().map(Timeline.Point::time).toList(),
-                snapshot.timeline().stream().map(Timeline.Point::active).toList()));
     } else if (preview != null && !preview.loadUnit().equals("unavailable")) {
       List<Long> times = new ArrayList<>();
       List<Double> values = new ArrayList<>();
@@ -215,18 +218,20 @@ public final class TrendPanel extends JPanel {
     Graphics2D g = (Graphics2D) raw.create();
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
     g.setFont(getFont().deriveFont(11f));
+    if(actual&&snapshot!=null)paintObserved(g);
+    if(snapshot!=null&&!groupSnapshots.isEmpty()){paintGroups(g);g.dispose();return;}
     int left = 64,
         top = 38,
         width = Math.max(1, getWidth() - 132),
-        height = Math.max(30, getHeight() - 115);
+        height = Math.max(30, plotHeight() - 115);
     long min = first(), max = last();
     List<Line> lines = lines();
     if(snapshot==null && preview==null) {
       g.setColor(getForeground());
       g.setFont(getFont().deriveFont(Font.BOLD,14f));String message="Waiting for capture";
-      g.drawString(message,(getWidth()-g.getFontMetrics().stringWidth(message))/2,getHeight()/2-8);
+      g.drawString(message,(getWidth()-g.getFontMetrics().stringWidth(message))/2,plotHeight()/2-8);
       g.setFont(getFont().deriveFont(12f));message="Live measurements appear when JMeter starts. No data has been collected.";
-      g.drawString(message,Math.max(12,(getWidth()-g.getFontMetrics().stringWidth(message))/2),getHeight()/2+16);g.dispose();return;
+      g.drawString(message,Math.max(12,(getWidth()-g.getFontMetrics().stringWidth(message))/2),plotHeight()/2+16);g.dispose();return;
     }
     boolean normalized = snapshot!=null && metric.equals("All Metrics");
     double loadMax = 1, metricMax = 1;
@@ -334,9 +339,9 @@ public final class TrendPanel extends JPanel {
     }
     g.drawString("Time ("+(snapshot==null?"seconds":"local HH:mm:ss")+")",left+width/2-60,top+height+37);
     if (snapshot == null && lines.isEmpty())
-      g.drawString("Phase windows only · manual timings do not define users or arrival rate", left+8,getHeight()-10);
+      g.drawString("Phase windows only · manual timings do not define users or arrival rate", left+8,plotHeight()-10);
     legend.clear();
-    int x = left, y = getHeight() - 13;
+    int x = left, y = plotHeight() - 13;
     for (Line line : lines) {
       String name = line.name() + (line.color() == 5 ? " (estimate)" : "");
       int w = g.getFontMetrics().stringWidth(name) + 22;
@@ -351,5 +356,75 @@ public final class TrendPanel extends JPanel {
       x += w + 9;
     }
     g.dispose();
+  }
+
+  /** Observed concurrency has its own users axis, independent of request units. */
+  private void paintObserved(Graphics2D g){
+    Map<String,ReportSnapshot> sources=groupSnapshots.isEmpty()?Map.of("selected",snapshot):groupSnapshots;
+    int x=64,y=plotHeight()+24,w=Math.max(1,getWidth()-100),h=58;
+    long begin=first(),end=groupSnapshots.isEmpty()?last():Math.max(begin+1,((Number)snapshot.metadata().get("executionEnd")).longValue());
+    double max=1;boolean available=false;
+    for(var source:sources.values())for(var p:source.timeline())if(p.active()!=null&&Double.isFinite(p.active())){available=true;max=Math.max(max,p.active());}
+    g.setColor(getForeground());g.drawString(available?"Observed active users (users)":"Observed active users: unavailable",x,y-8);
+    if(!available)return;
+    for(int i=0;i<=2;i++){int yy=y+h-h*i/2;g.setColor(new Color(getForeground().getRed(),getForeground().getGreen(),getForeground().getBlue(),35));g.drawLine(x,yy,x+w,yy);g.setColor(getForeground());g.drawString(String.format(Locale.ROOT,"%.0f",max*i/2),x-30,yy+4);}
+    for(var entry:sources.entrySet()){
+      Path2D line=new Path2D.Double();boolean open=false;
+      for(var point:entry.getValue().timeline()){
+        Double v=point.active();if(v==null||!Double.isFinite(v)){open=false;continue;}
+        double xx=x+(point.time()-begin)*(double)w/(end-begin),yy=y+h-v/max*h;
+        if(open)line.lineTo(xx,yy);else{line.moveTo(xx,yy);open=true;}
+      }
+      g.setColor(groupColors.getOrDefault(entry.getKey(),COLORS[7]));g.setStroke(new BasicStroke(1.2f));g.draw(line);
+    }
+    g.setColor(getForeground());    for(int i=0;i<=2;i++){long t=begin+(end-begin)*i/2;g.drawString(DateTimeFormatter.ofPattern("HH:mm:ss").format(Instant.ofEpochMilli(t).atZone(ZoneId.systemDefault())),x+w*i/2-15,y+h+15);}    g.drawString("Observed users · same timestamps and group colors as above",x,y+h+31);
+  }
+
+  /** Small multiples keep incompatible units separate in combined All Metrics. */
+  private void paintGroups(Graphics2D g){
+    boolean all=metric.equals("All Metrics");
+    int legends=(groupSnapshots.size()+2)/3;
+    int chartHeight=Math.max(90,(plotHeight()-38-legends*18)/(all?3:1));
+    int chartWidth=all?getWidth()/2:getWidth();
+    int firstMetric=all?1:Math.max(1,Arrays.asList(METRICS).indexOf(metric));
+    long begin=first(),end=Math.max(begin+1,((Number)snapshot.metadata().get("executionEnd")).longValue());
+    for(int index=0;index<(all?6:1);index++){
+      int m=all?index+1:firstMetric;
+      int x=(all?index%2:0)*chartWidth+48,y=(all?index/2:0)*chartHeight+30;
+      int width=Math.max(1,chartWidth-68),height=Math.max(30,chartHeight-52);double max=1;
+      for(var member:groupSnapshots.values())for(var point:member.timeline()){Double v=value(point,m);if(v!=null)max=Math.max(max,v);}
+      g.setColor(getForeground());g.drawString(METRICS[m]+" ("+unit(m)+")",x,y-12);
+      for(int tick=0;tick<=2;tick++){
+        int yy=y+height-height*tick/2;g.setColor(new Color(getForeground().getRed(),getForeground().getGreen(),getForeground().getBlue(),35));g.drawLine(x,yy,x+width,yy);
+        g.setColor(getForeground());g.drawString(String.format(Locale.ROOT,"%.1f",max*tick/2),Math.max(0,x-43),yy+4);
+      }
+      for(var entry:groupSnapshots.entrySet()){
+        Path2D line=new Path2D.Double();boolean open=false;
+        long memberStart=((Number)entry.getValue().metadata().getOrDefault("groupExecutionStart",begin)).longValue();
+        long memberEnd=((Number)entry.getValue().metadata().get("executionEnd")).longValue();
+        Color color=groupColors.get(entry.getKey());
+        g.setColor(new Color(color.getRed(),color.getGreen(),color.getBlue(),55));
+        g.setStroke(new BasicStroke(1,0,0,1,new float[]{2,4},0));
+        for(var phase:entry.getValue().phases())if(!phase.name().equals("Complete execution"))for(var window:phase.configured()){
+          int marker=x+(int)((window.start()-begin)*(double)width/(end-begin));if(marker>=x&&marker<=x+width)g.drawLine(marker,y,marker,y+height);
+        }
+        for(var point:entry.getValue().timeline()){
+          Double v=value(point,m);if(point.time()+point.durationSeconds()*1000<=memberStart||point.time()>memberEnd||v==null||!Double.isFinite(v)){open=false;continue;}
+          double xx=x+(point.time()-begin)*(double)width/(end-begin),yy=y+height-v/max*height;
+          if(open)line.lineTo(xx,yy);else{line.moveTo(xx,yy);open=true;}
+        }
+        g.setColor(groupColors.get(entry.getKey()));g.setStroke(new BasicStroke(1.3f));g.draw(line);
+      }
+      g.setColor(getForeground());g.setStroke(new BasicStroke(1));g.drawLine(x,y,x,y+height);g.drawLine(x,y+height,x+width,y+height);
+      for(int tick=0;tick<=2;tick++){long t=begin+(end-begin)*tick/2;g.drawString(DateTimeFormatter.ofPattern("HH:mm:ss").format(Instant.ofEpochMilli(t).atZone(ZoneId.systemDefault())),x+width*tick/2-15,y+height+15);}
+    }
+    int index=0;for(var member:groupSnapshots.entrySet()){
+      int x=16+(index%3)*(getWidth()/3),y=plotHeight()-8-(index/3)*18;
+      String name=Objects.toString(member.getValue().metadata().getOrDefault("selectedThreadGroupLabel",member.getKey()));
+      String suffix=" ["+member.getKey().substring(Math.max(0,member.getKey().length()-8))+"]";
+      while(name.length()>6&&g.getFontMetrics().stringWidth(name+suffix)>getWidth()/3-38)name=name.substring(0,name.length()-2);
+      name+=suffix;
+      g.setColor(groupColors.get(member.getKey()));g.drawLine(x,y-4,x+14,y-4);g.setColor(getForeground());g.drawString(name,x+20,y);index++;
+    }
   }
 }

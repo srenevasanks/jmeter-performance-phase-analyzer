@@ -25,6 +25,10 @@ class GuiTest {
         () -> {
           PhaseAnalyzerGui gui = new PhaseAnalyzerGui();
           try {
+            gui.setDiscovered(java.util.List.of(new GroupDiscovery.Entry("gui","GUI fixture","GUI fixture","org.apache.jmeter.threads.ThreadGroup",true,Schedule.phases(0,1000,2000,0),"",Map.of())));
+            var mode=PhaseAnalyzerGui.class.getDeclaredField("manual");mode.setAccessible(true);((JRadioButton)mode.get(gui)).doClick();
+            var enabled=PhaseAnalyzerGui.class.getDeclaredField("present");enabled.setAccessible(true);
+            var phaseInputs=(Map<String,JCheckBox>)enabled.get(gui);phaseInputs.get("up").doClick();phaseInputs.get("down").doClick();
             assertEquals("Performance Phase Analyzer", gui.getStaticLabel());
             var lifecycleTimer = PhaseAnalyzerGui.class.getDeclaredField("timer");
             lifecycleTimer.setAccessible(true);

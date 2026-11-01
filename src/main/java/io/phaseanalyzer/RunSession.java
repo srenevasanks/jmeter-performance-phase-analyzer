@@ -18,6 +18,8 @@ public final class RunSession {
   public volatile String captureStatus = "Running";
   public volatile String testOutcome = "Unknown";
   public volatile String jmxFilename;
+  // Runtime-only source identity: two copied JMX files may retain the same listener id.
+  volatile Path sourcePlan;
   public final Path reportDirectory;
   public final long testStart;
   public volatile long end;
@@ -26,6 +28,55 @@ public final class RunSession {
   public final List<String> warnings = new CopyOnWriteArrayList<>();
   public final AtomicLong dropped = new AtomicLong();
   final LiveThroughput liveThroughput = new LiveThroughput();
+  private volatile PhaseAnalyzerListener frozenConfiguration;
+  private final Map<String,Long> groupEnds=new ConcurrentHashMap<>();
+  private final Map<String,String> groupOutcomes=new ConcurrentHashMap<>();
+  private final Map<String,String> displayNames=new ConcurrentHashMap<>();
+  private final Map<String,Map<String,Double>> completedRates=new ConcurrentHashMap<>();
+  private void freezeRate(String key,long cutoff){
+    Map<String,Double> rates=new HashMap<>();for(String mode:List.of("Requests","Transactions","Separate"))rates.put(mode,liveThroughput.rate(key,mode,start,cutoff));completedRates.putIfAbsent(key,Collections.unmodifiableMap(rates));
+  }
+  Double currentRate(String key,String mode,long cutoff){var rates=completedRates.get(key);return rates==null?liveThroughput.rate(key,mode,start,cutoff):rates.get(mode);}
+  String displayName(String key){
+    if(frozenConfiguration!=null)try{for(var entry:Reports.mapper().readTree(frozenConfiguration.getPropertyAsString("phase.catalog","[]")))if(entry.path("key").asText().equals(key))return entry.path("label").asText(entry.path("name").asText(key));}catch(Exception ignored){}
+    String name=displayNames.getOrDefault(key,key);
+    return displayNames.values().stream().filter(name::equals).count()>1?name+" ["+key.substring(Math.max(0,key.length()-8))+"]":name;
+  }
+  private final Set<String> naturalWorkerEnds=ConcurrentHashMap.newKeySet(),abnormalWorkerEnds=ConcurrentHashMap.newKeySet();
+  public void freezeConfiguration(PhaseAnalyzerListener config){frozenConfiguration=(PhaseAnalyzerListener)config.clone();}
+  RunSession emptyCapture() throws IOException {
+    RunSession next=new RunSession(reportDirectory,testStart);
+    next.jmxFilename=jmxFilename;next.sourcePlan=sourcePlan;
+    next.frozenConfiguration=frozenConfiguration==null?null:(PhaseAnalyzerListener)frozenConfiguration.clone();
+    next.groups.putAll(groups);next.observedStarts.putAll(observedStarts);next.nativeAnchored.addAll(nativeAnchored);
+    next.groupEnds.putAll(groupEnds);next.groupOutcomes.putAll(groupOutcomes);next.displayNames.putAll(displayNames);
+    next.live.putAll(live);
+    next.naturalWorkerEnds.addAll(naturalWorkerEnds);next.abnormalWorkerEnds.addAll(abnormalWorkerEnds);
+    return next;
+  }
+  synchronized void bindInitialSelection(String key){
+    if(frozenConfiguration!=null&&frozenConfiguration.getPropertyAsString("phase.group").isBlank()){
+      frozenConfiguration.setProperty("phase.group",key);PhaseConfiguration.migrateLegacy(frozenConfiguration);
+    }
+  }
+  PhaseAnalyzerListener analysisConfiguration(PhaseAnalyzerListener current,String key){
+    PhaseAnalyzerListener result=(PhaseAnalyzerListener)(frozenConfiguration==null?current:frozenConfiguration).clone();
+    result.setProperty("phase.group",key);
+    result.setProperty("phase.catalog",current.getPropertyAsString("phase.catalog"));
+    if(frozenConfiguration!=null)PhaseConfiguration.apply(result,PhaseConfiguration.read(frozenConfiguration,key));
+    return result;
+  }
+  boolean hasFrozenConfiguration(){return frozenConfiguration!=null;}
+  boolean participated(String key){return observedStarts.containsKey(key);}
+  boolean hasParticipatingGroups(){return !observedStarts.isEmpty();}
+  long groupEnd(String key){return groupEnds.getOrDefault(key,end);}
+  long groupStart(String key){return observedStarts.getOrDefault(key,start);}
+  String groupStatus(String key){
+    if(!participated(key))return "Execution Not Started";
+    if(groupEnds.containsKey(key))return groupOutcomes.getOrDefault(key,"Finished (cause unavailable)");
+    if(end>0)return testOutcome.equals("Unknown")?captureStatus:testOutcome;
+    return "Running";
+  }
   private final Set<String> nativeAnchored = ConcurrentHashMap.newKeySet();
   private final Map<String, Long> observedStarts = new ConcurrentHashMap<>();
 
@@ -34,8 +85,8 @@ public final class RunSession {
       if (e.enabled()) {
         if (catalog.stream().filter(x -> x.enabled() && x.key().equals(e.key())).count() > 1) {
           warning(
-              "Duplicate names without saved plugin identities: open the listener and Apply"
-                  + " Configuration before execution for stable cross-run identifiers.");
+              "Ambiguous Thread Group identities: open the listener and save the test plan"
+                  + " before execution for stable cross-run identifiers.");
           continue;
         }
         groups.put(
@@ -44,11 +95,8 @@ public final class RunSession {
                 e.key(),
                 e.implementation(),
                 testStart,
-                parallelSafe ? e.schedule() : null,
-                parallelSafe
-                    ? e.warning()
-                    : "origin pending: group launch order is sequential or contains"
-                        + " setup/teardown"));
+                null,
+                "origin pending: Thread Group has not started"));
       }
   }
 
@@ -86,7 +134,21 @@ public final class RunSession {
     if (group != null) actualThreads.computeIfAbsent(GroupDiscovery.key(group), key -> new AtomicInteger()).incrementAndGet();
   }
   public void recordThreadFinish(AbstractThreadGroup group) {
-    if (group != null) actualThreads.computeIfAbsent(GroupDiscovery.key(group), key -> new AtomicInteger()).updateAndGet(n -> Math.max(0, n - 1));
+    recordThreadFinish(group,JMeterContextService.getContext().getThread());
+  }
+  public void recordThreadFinish(AbstractThreadGroup group,JMeterThread thread) {
+    if (group != null){
+      String key=GroupDiscovery.key(group);
+      if(thread!=null)try{
+        Object controller=RuntimeScheduleOrigin.field(thread,"threadGroupLoopController");
+        boolean natural=controller instanceof org.apache.jmeter.control.Controller c&&c.isDone();
+        if(group.getSamplerController() instanceof org.apache.jmeter.control.LoopController loop
+            &&loop.getLoops()>0&&((JMeterVariables)RuntimeScheduleOrigin.field(thread,"threadVars")).getIteration()>=loop.getLoops())natural=true;
+        if(thread.getEndTime()>0&&System.currentTimeMillis()+250>=thread.getEndTime())natural=true;
+        if(natural)naturalWorkerEnds.add(key);else abnormalWorkerEnds.add(key);
+      }catch(ReflectiveOperationException|RuntimeException unavailable){warning("Native worker completion cause unavailable for "+key);}
+      actualThreads.computeIfAbsent(key, ignored -> new AtomicInteger()).updateAndGet(n -> Math.max(0, n - 1));
+    }
   }
   public void seedActiveThreads(AbstractThreadGroup group, int count) {
     actualThreads.put(GroupDiscovery.key(group), new AtomicInteger(Math.max(0, count)));
@@ -152,6 +214,7 @@ public final class RunSession {
               + " Configuration to persist their identities in JMX.");
     }
     live.putIfAbsent(groupKey, g);
+    displayNames.putIfAbsent(groupKey,g.getName());
     observedStarts.putIfAbsent(groupKey, System.currentTimeMillis());
     Group previous = groups.get(groupKey);
     if (previous != null && previous.warning().startsWith("origin pending:"))
@@ -220,6 +283,7 @@ public final class RunSession {
 
   private void recordLoad() {
     try {
+      observeGroupCompletion();
       synchronized (loadWriter) {
         long now = System.currentTimeMillis();
         for (var g : live.entrySet())
@@ -231,12 +295,45 @@ public final class RunSession {
     }
   }
 
+  private void observeGroupCompletion(){
+    for(var entry:live.entrySet()){
+      String key=entry.getKey();var group=entry.getValue();
+      if(groupEnds.containsKey(key)||!participated(key)||group.numberOfActiveThreads()>0)continue;
+      if(actualThreads.getOrDefault(key,new AtomicInteger()).get()>0)continue;
+      // Native starters can remain alive while arrival/stepping groups have no
+      // active workers. A temporary gap is not a group completion.
+      if(hasLiveStarter(group))continue;
+      long now=System.currentTimeMillis();Group configured=groups.get(key);
+      boolean natural=group.getSamplerController()!=null&&group.getSamplerController().isDone();
+      natural|=naturalWorkerEnds.contains(key)&&!abnormalWorkerEnds.contains(key);
+      if(configured!=null&&configured.schedule()!=null&&now+250>=configured.origin()+configured.schedule().end())natural=true;
+      groupOutcomes.put(key,natural?"Completed":"Stopped / interrupted (native workers finished)");
+      groupEnds.put(key,now);
+      freezeRate(key,now);
+    }
+  }
+  static boolean hasLiveStarter(AbstractThreadGroup group){
+    for(Class<?> type=group.getClass();type!=null;type=type.getSuperclass())for(var field:type.getDeclaredFields()){
+      if(java.lang.reflect.Modifier.isStatic(field.getModifiers())||!field.getName().toLowerCase(Locale.ROOT).contains("starter"))continue;
+      try{field.setAccessible(true);Object value=field.get(group);
+        if(value instanceof Thread thread&&thread.isAlive())return true;
+        if(value instanceof java.util.concurrent.atomic.AtomicReference<?> ref)value=ref.get();
+        if(value instanceof java.util.concurrent.Future<?> future&&!future.isDone())return true;
+      }catch(ReflectiveOperationException|RuntimeException unavailable){return true;}
+    }
+    return false;
+  }
+
   public synchronized void finish() throws Exception {
     if (finalized) return;
     if (running) stopAccepting("Completed");
     monitor.shutdown();
     monitor.awaitTermination(2, TimeUnit.SECONDS);
     recordLoad();
+    for(String key:observedStarts.keySet())if(!groupEnds.containsKey(key)){
+      groupEnds.put(key,end);groupOutcomes.put(key,testOutcome.equals("Unknown")?captureStatus:testOutcome);
+      freezeRate(key,end);
+    }
     worker.shutdown();
     if (!worker.awaitTermination(60, TimeUnit.SECONDS)) {
       warning("Sample spool did not drain within 60 seconds; execution incomplete");

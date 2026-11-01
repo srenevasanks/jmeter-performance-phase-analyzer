@@ -18,8 +18,9 @@ import org.apache.jmeter.visualizers.gui.AbstractListenerGui;
 import org.apache.jorphan.collections.HashTree;
 
 /** Exactly the three approved primary tabs. */
-public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrollable {
+public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrollable, org.apache.jmeter.samplers.Clearable {
   private static final long serialVersionUID = 2L;
+  private static final AtomicBoolean sourceLogged=new AtomicBoolean();
   private static final String[] SCOPES = {
     "Steady load", "Ramp-up", "Ramp-down", "Complete execution"
   };
@@ -27,21 +28,15 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   private final JComboBox<String> dashboardScope = new JComboBox<>(SCOPES),
       tableScope = new JComboBox<>(SCOPES),
       metric = new JComboBox<>(TrendPanel.METRICS),
-      units = new JComboBox<>(new String[] {"Seconds", "Minutes"}),
-      population = new JComboBox<>(new String[] {"Requests", "Transactions", "Separate"}),
-      plateau = new JComboBox<>();
+      units = new JComboBox<>(new String[] {"Seconds", "Minutes"});
   private final JComboBox<Choice> group = new JComboBox<>();
   private final JRadioButton automatic = new JRadioButton("Automatic (recommended)", true),
       manual = new JRadioButton("Manual");
   private final Map<String, JTextField> fields = new LinkedHashMap<>();
   private final Map<String, JCheckBox> present = new LinkedHashMap<>();
-  private final JTextField output = new JTextField("phase-analyzer-results", 22),
-      absoluteStart = new JTextField(16),
-      absoluteEnd = new JTextField(16),
-      filter = new JTextField(16);
-  private final JCheckBox strict = new JCheckBox("Strict: start and completion inside window"),
-      autoRefresh = new JCheckBox("Auto-refresh", true),
-      showActual = new JCheckBox("Observed users");
+  private final JTextField filter=new JTextField(16);
+  private final JCheckBox autoRefresh=new JCheckBox("Auto-refresh",true), showActual=new JCheckBox("Show observed active users");
+  private final JButton refreshNow=new JButton("Refresh");
   private final JSpinner refresh = new JSpinner(new SpinnerNumberModel(2, 1, 60, 1));
   private final JLabel header = new JLabel("Not started"),
       status = new JLabel("Ready"),
@@ -61,6 +56,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
       capture = new JButton("Stop Capture");
   private final JTable table = new JTable();
   private final AtomicBoolean busy = new AtomicBoolean(), discovering = new AtomicBoolean();
+  private boolean refreshPending;
   private final javax.swing.Timer timer;
   private PhaseAnalyzerListener element;
   private ReportSnapshot snapshot;
@@ -74,6 +70,17 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   private long lastUnits = 1;
   private String renderedRunId = "";
   private long selectionRevision;
+  private String selectedPhase="Steady load", selectionKey="";
+  private Map<String,ReportSnapshot> groupSnapshots=Map.of();
+  private final JLabel selectedPhaseMetrics=new JLabel(" ");
+  private javax.swing.tree.TreeModel observedTree;
+  private final AtomicBoolean discoveryQueued=new AtomicBoolean();
+  private final javax.swing.event.TreeModelListener treeChanges=new javax.swing.event.TreeModelListener(){
+    public void treeNodesChanged(javax.swing.event.TreeModelEvent e){scheduleDiscovery();}
+    public void treeNodesInserted(javax.swing.event.TreeModelEvent e){scheduleDiscovery();}
+    public void treeNodesRemoved(javax.swing.event.TreeModelEvent e){scheduleDiscovery();}
+    public void treeStructureChanged(javax.swing.event.TreeModelEvent e){scheduleDiscovery();}
+  };
   private final JPanel tableCards = new JPanel(new CardLayout());
 
 
@@ -85,18 +92,18 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   }
 
   public PhaseAnalyzerGui() {
+    if(sourceLogged.compareAndSet(false,true))try{
+      org.slf4j.LoggerFactory.getLogger(PhaseAnalyzerGui.class).info("Performance Phase Analyzer GUI loaded from {}",PhaseAnalyzerGui.class.getProtectionDomain().getCodeSource().getLocation());
+    }catch(SecurityException|NullPointerException unavailable){/* Optional diagnostic only. */}
     if(GuiPackage.getInstance()!=null)PlanIdentitySync.install();
     setLayout(new BorderLayout(8, 8));
     setBorder(makeBorder());
     add(makeTitlePanel(), BorderLayout.NORTH);
     for (var e :
         new String[][] {
-          {"delay", "0"},
           {"up", "0"},
           {"hold", "60"},
-          {"down", "0"},
-          {"apdexT", "500"},
-          {"apdexF", "2000"}
+          {"down", "0"}
         }) fields.put(e[0], new JTextField(e[1], 8));
     body = new JPanel(new BorderLayout(0, 4));
     mainTabs.addTab("Dashboard", dashboard());
@@ -107,8 +114,8 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     ButtonGroup modes = new ButtonGroup();
     modes.add(automatic);
     modes.add(manual);
-    automatic.addActionListener(e -> updateConfiguration());
-    manual.addActionListener(e -> updateConfiguration());
+    automatic.addActionListener(e -> configurationEdited());
+    manual.addActionListener(e -> configurationEdited());
     units.addActionListener(e -> {
       if (!filling) {
         long next = multiplier();
@@ -117,30 +124,34 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
           for(String k: List.of("up","hold","down"))try {double seconds = Double.parseDouble(fields.get(k).getText()) * lastUnits; fields.get(k).setText(seconds / next == Math.rint(seconds / next) ? Long.toString((long)(seconds / next)) : Double.toString(seconds / next));} catch(NumberFormatException ignored) {}
           filling = false; lastUnits = next;
         }
-        updatePreview();
+        configurationEdited();
       }
     });
     for (var text : fields.values())
-      text.getDocument().addDocumentListener(change(this::updatePreview));
-    for (var check : present.values()) check.addActionListener(e -> updateConfiguration());
-    dashboardScope.addActionListener(e -> renderDashboard());
-    tableScope.addActionListener(e -> renderTable());
+      text.getDocument().addDocumentListener(change(this::configurationEdited));
+    for (var check : present.values()) check.addActionListener(e -> configurationEdited());
+    dashboardScope.addActionListener(e -> selectPhase(dashboardScope));
+    tableScope.addActionListener(e -> selectPhase(tableScope));
     metric.setSelectedItem("All Metrics");
     graph.setMetric("All Metrics");
     metric.addActionListener(e -> graph.setMetric(Objects.toString(metric.getSelectedItem())));
     showActual.addActionListener(e -> graph.setActual(showActual.isSelected()));
+    showActual.setToolTipText("Shows or hides the actual active-user count on the timeline. Does not affect collected metrics.");
+    refreshNow.addActionListener(e -> requestSnapshot());
+    autoRefresh.addActionListener(e -> {if(autoRefresh.isSelected())requestSnapshot();});
     filter.getDocument().addDocumentListener(change(this::filterRows));
-    group.addActionListener(
-        e -> {
-          if (!filling) {
-            if(element!=null)element.setProperty("phase.group",selectedKey());
-            selectionRevision++;
-            snapshot=null;
-            graph.setSnapshot(null);renderDashboard();renderTable();
-            updateConfiguration();
-            if(element!=null&&element.session()!=null)requestSnapshot();
-          }
-        });
+    group.setRenderer(new DefaultListCellRenderer(){
+      public Component getListCellRendererComponent(JList<?> list,Object value,int index,boolean selected,boolean focus){
+        Component c=super.getListCellRendererComponent(list,value,index,selected,focus);
+        c.setEnabled(!(value instanceof Choice choice)||choice.enabled());return c;
+      }
+    });
+    group.addPopupMenuListener(new PopupMenuListener(){
+      public void popupMenuWillBecomeVisible(PopupMenuEvent e){discover();}
+      public void popupMenuWillBecomeInvisible(PopupMenuEvent e){}
+      public void popupMenuCanceled(PopupMenuEvent e){}
+    });
+    group.addActionListener(e->{if(!filling)selectionChanged();});
     html.addActionListener(e -> export("html"));
     excel.addActionListener(e -> export("xlsx"));
     capture.addActionListener(e -> captureAction());
@@ -151,7 +162,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     html.setEnabled(false);
     excel.setEnabled(false);
     capture.setEnabled(false);
-    group.addItem(new Choice("All", "All Thread Groups", true));
+    group.addItem(new Choice("", "No enabled Thread Groups available.", false));
     updateConfiguration();
     renderDashboard();
     renderTable();
@@ -162,14 +173,10 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
             1000,
             e -> {
               long now = System.currentTimeMillis();
-              if (now - lastDiscovery > 2000) {
-                discover();
-                lastDiscovery = now;
-              }
-              clock();
+              if(autoRefresh.isSelected())clock();
               if (element != null
-                  && element.session() != null
-                  && (autoRefresh.isSelected() || snapshot == null || element.session().end > 0)
+                  && viewSession() != null
+                  && autoRefresh.isSelected()
                   && now - lastRefresh >= ((Number) refresh.getValue()).longValue() * 1000) {
                 requestSnapshot();
                 lastRefresh = now;
@@ -187,12 +194,12 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   @Override
   public void addNotify() {
     super.addNotify();
-    timer.start();
+    attachTree();timer.start();
   }
 
   @Override
   public void removeNotify() {
-    timer.stop();
+    timer.stop();detachTree();
     super.removeNotify();
   }
 
@@ -209,7 +216,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     JPanel p=vertical();p.add(section("Execution",executionStrip(false)));
     JPanel metrics=new JPanel(new BorderLayout(4,6));JPanel scope=new JPanel(new FlowLayout(FlowLayout.RIGHT,4,0));scope.add(new JLabel("Phase:"));scope.add(dashboardScope);metrics.add(scope,BorderLayout.NORTH);
     JPanel grid=new JPanel(new GridLayout(2,3,14,6));String[] names={"Total Samples","Average Response Time","P90","P95","Error Rate","Throughput"};
-    for(int i=0;i<6;i++){JPanel pair=new JPanel(new BorderLayout(8,0));pair.add(new JLabel(names[i]+":"),BorderLayout.WEST);kpis[i]=new JLabel("—");kpis[i].setFont(kpis[i].getFont().deriveFont(Font.BOLD));pair.add(kpis[i]);grid.add(pair);}metrics.add(grid);p.add(section("Key Metrics",metrics));
+    for(int i=0;i<6;i++){JPanel pair=new JPanel(new BorderLayout(8,0));pair.add(new JLabel(names[i]+":"),BorderLayout.WEST);kpis[i]=new JLabel("—");kpis[i].setFont(kpis[i].getFont().deriveFont(Font.BOLD));pair.add(kpis[i]);grid.add(pair);}metrics.add(grid);metrics.add(selectedPhaseMetrics,BorderLayout.SOUTH);p.add(section("Key Metrics",metrics));
     p.add(section("Phase Overview",dashboardPhases));progress.setStringPainted(true);progress.setString("Ready to capture");JPanel bar=new JPanel(new BorderLayout(4,4));bar.add(progress);bar.add(status,BorderLayout.SOUTH);p.add(section("Execution Progress",bar));
     p.add(collapsible("Test Information",new JScrollPane(details)));JPanel actions=new JPanel(new FlowLayout(FlowLayout.RIGHT,6,0));actions.add(html);actions.add(excel);p.add(actions);phaseCards(dashboardPhases);return scroll(p);
   }
@@ -227,20 +234,18 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     }
     durationCards.add(inputs,"Manual");durationCards.add(detected,"Automatic");JPanel edit=new JPanel(new BorderLayout(0,8));JPanel unitBar=new JPanel(new FlowLayout(FlowLayout.RIGHT,0,0));unitBar.add(units);edit.add(unitBar,BorderLayout.NORTH);edit.add(durationCards);p.add(section("3. Phase durations",edit));
     preview.setPreferredSize(new Dimension(800,155));p.add(section("Load Timeline Preview",preview));
-    JPanel advanced=new JPanel(new GridLayout(0,2,12,8));
-    addPair(advanced,"Manual schedule reference",new JLabel("Original execution start"));addPair(advanced,"Initial delay (seconds)",fields.get("delay"));addPair(advanced,"Aggregation population",population);addPair(advanced,"Configured steady plateau",plateau);addPair(advanced,"Absolute start / epoch ms",absoluteStart);addPair(advanced,"Absolute end / epoch ms",absoluteEnd);addPair(advanced,"APDEX satisfied / ms",fields.get("apdexT"));addPair(advanced,"APDEX tolerated / ms",fields.get("apdexF"));advanced.add(strict);advanced.add(new JLabel(""));addPair(advanced,"Default report directory",output);
-    JButton imported=new JButton("Import saved JTL");imported.addActionListener(e->importJtl());advanced.add(imported);p.add(collapsible("Advanced Settings (optional)",advanced));
     JPanel messages=new JPanel(new BorderLayout(0,5));messages.add(phaseInfo);messages.add(hint,BorderLayout.SOUTH);p.add(section("Configuration status",messages));
-    JPanel actions=new JPanel(new FlowLayout(FlowLayout.RIGHT,8,0));JButton reset=new JButton("Reset"),apply=new JButton("Apply Configuration");reset.addActionListener(e->resetConfiguration());apply.addActionListener(e->{try{if(element==null)element=(PhaseAnalyzerListener)createTestElement();else write(element);hint.setText("Configuration applied. Ready for the next capture.");requestSnapshot();}catch(Exception failure){error(failure);}});actions.add(reset);actions.add(apply);p.add(actions);return scroll(p);
+    return scroll(p);
   }
 
   private JPanel live() {
     JPanel p=vertical();p.add(section("",executionStrip(true)));
     JPanel chart=new JPanel(new BorderLayout(0,8)),controls=new JPanel(new BorderLayout());controls.add(nativeLabel("Live Load Timeline",14,true));
     JPanel selects=new JPanel(new FlowLayout(FlowLayout.RIGHT,8,0));showActual.setSelected(true);graph.setActual(true);selects.add(showActual);selects.add(metric);controls.add(selects,BorderLayout.EAST);chart.add(controls,BorderLayout.NORTH);graph.setPreferredSize(new Dimension(800,205));chart.add(graph);p.add(section("",chart));p.add(section("Phase Summary",livePhases));phaseCards(livePhases);
-    JPanel aggregate=new JPanel(new BorderLayout(0,10)),bar=new JPanel(new BorderLayout());bar.add(nativeLabel("Live Aggregate Metrics",14,true));JPanel search=new JPanel(new FlowLayout(FlowLayout.RIGHT,6,0));search.add(new JLabel("API search"));search.add(filter);search.add(tableScope);bar.add(search,BorderLayout.SOUTH);aggregate.add(bar,BorderLayout.NORTH);
+    JPanel aggregate=new JPanel(new BorderLayout(0,4)),bar=new JPanel(new BorderLayout(0,4));bar.add(nativeLabel("Live Aggregate Metrics",14,true),BorderLayout.NORTH);JPanel search=new JPanel(new FlowLayout(FlowLayout.RIGHT,6,0));search.add(new JLabel("API search"));search.add(filter);search.add(tableScope);bar.add(search,BorderLayout.CENTER);aggregate.add(bar,BorderLayout.NORTH);
+    bar.setMaximumSize(new Dimension(Integer.MAX_VALUE,bar.getPreferredSize().height));
     table.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);table.setAutoCreateRowSorter(true);table.setFillsViewportHeight(true);JScrollPane data=new JScrollPane(table);data.setPreferredSize(new Dimension(850,160));data.setMinimumSize(new Dimension(100,150));tableEmpty.setPreferredSize(new Dimension(800,42));tableCards.add(data,"Data");tableCards.add(tableEmpty,"Empty");aggregate.add(tableCards);p.add(section("",aggregate));
-    JPanel footer=new JPanel(new FlowLayout(FlowLayout.LEFT,8,0));footer.add(autoRefresh);footer.add(refresh);JLabel note=new JLabel("seconds · aggregate percentiles are exact; chart P95 is an estimate");footer.add(note);p.add(footer);return scroll(p);
+    JPanel footer=new JPanel(new FlowLayout(FlowLayout.LEFT,8,0));footer.add(autoRefresh);footer.add(refresh);footer.add(new JLabel("seconds"));footer.add(refreshNow);JLabel note=new JLabel("Aggregate percentiles are exact; chart P95 is an estimate");footer.add(note);p.add(footer);return scroll(p);
   }
 
   private static void addPair(JPanel p, String label, Component c) {
@@ -308,14 +313,8 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     try {
       write(p);
     } catch (Exception e) {
-      error(e);
+      hint.setText("Invalid or incomplete input; last valid configuration retained.");
     }
-  }
-
-  private long number(String key) {
-    long v = Long.parseLong(fields.get(key).getText().trim());
-    if (v < 0) throw new IllegalArgumentException(key + " must be nonnegative");
-    return v;
   }
 
   private long multiplier() {
@@ -329,60 +328,78 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   }
 
   private void write(TestElement p) {
-    long delay = number("delay"),
-        up = duration("up"),
-        hold = duration("hold"),
-        down = duration("down"),
-        t = number("apdexT"),
-        f = number("apdexF");
-    if (f < t)
-      throw new IllegalArgumentException(
-          "APDEX tolerated threshold must be >= satisfied threshold");
-    Schedule.phases(
-        Math.multiplyExact(delay, 1000),
-        Math.multiplyExact(up, 1000),
-        Math.multiplyExact(hold, 1000),
-        Math.multiplyExact(down, 1000));
-    String a = absoluteStart.getText().trim(), b = absoluteEnd.getText().trim();
-    if (!a.isBlank() || !b.isBlank())
-      new Window("Steady load", Long.parseLong(a), Long.parseLong(b));
-    Choice c = (Choice) group.getSelectedItem();
-    // A disabled selection is a valid saved-plan state, not a GUI save error.
-    p.setProperty("phase.automatic", automatic.isSelected());
-    p.setProperty("phase.strict", strict.isSelected());
-    p.setProperty("phase.delay", delay);
-    p.setProperty("phase.up", up);
-    p.setProperty("phase.hold", hold);
-    p.setProperty("phase.down", down);
-    p.setProperty("phase.apdexT", t);
-    p.setProperty("phase.apdexF", f);
-    p.setProperty("phase.group", c == null ? "All" : c.key());
-    p.setProperty("phase.mode", Objects.toString(population.getSelectedItem(), "Requests"));
-    p.setProperty("phase.plateau", plateau.getSelectedIndex() - 1);
-    p.setProperty("phase.output", output.getText().trim());
-    p.setProperty("phase.absoluteStart", a);
-    p.setProperty("phase.absoluteEnd", b);
+    p.setProperty("phase.group",selectedKey());
+    var valid=element==null?PhaseConfiguration.defaults():PhaseConfiguration.read(element,selectedKey());
+    PhaseConfiguration.Value draft=automatic.isSelected()?new PhaseConfiguration.Value(true,valid.up(),valid.hold(),valid.down()):new PhaseConfiguration.Value(false,duration("up"),duration("hold"),duration("down"));
+    PhaseConfiguration.apply((PhaseAnalyzerListener)p,draft);
+    PhaseConfiguration.save((PhaseAnalyzerListener)p,selectedKey(),draft);
+    try {p.setProperty("phase.catalog",Reports.mapper().writeValueAsString(discovered));}
+    catch(Exception e){throw new IllegalArgumentException(e);}
+  }
+
+  private void configurationEdited(){
+    if(filling)return;
+    if(selectedKey().equals("All")){automatic.setSelected(true);manual.setSelected(false);}
     try {
-      p.setProperty("phase.catalog", Reports.mapper().writeValueAsString(discovered));
-    } catch (Exception e) {
-      throw new IllegalArgumentException(e);
+      var valid=element==null?PhaseConfiguration.defaults():PhaseConfiguration.read(element,selectedKey());
+      var draft=automatic.isSelected()?new PhaseConfiguration.Value(true,valid.up(),valid.hold(),valid.down()):new PhaseConfiguration.Value(false,duration("up"),duration("hold"),duration("down"));
+      if(element!=null){PhaseConfiguration.save(element,selectedKey(),draft);element.removeProperty("phase.absoluteStart");element.removeProperty("phase.absoluteEnd");if(selectedKey().equals("All"))PhaseConfiguration.apply(element,PhaseConfiguration.defaults());}
+      hint.setText(element!=null&&element.testRunning()?"Saved for the next execution; current capture boundaries are unchanged.":"Configuration saved automatically.");
+    }catch(Exception invalid){hint.setText("Invalid or incomplete input; last valid configuration retained. "+invalid.getMessage());}
+    updateConfiguration();
+  }
+
+  private void loadConfiguration(){
+    var value=element==null?PhaseConfiguration.defaults():PhaseConfiguration.read(element,selectedKey());
+    filling=true;
+    automatic.setSelected(value.automatic());manual.setSelected(!value.automatic());
+    long[] durations={value.up(),value.hold(),value.down()};int index=0;
+    for(String key:List.of("up","hold","down")){
+      long seconds=durations[index++];fields.get(key).setText(Double.toString((double)seconds/multiplier()));present.get(key).setSelected(seconds>0);
     }
-    GuiPackage gui = GuiPackage.getInstance();
-    if (gui != null)
-      for (Object node : gui.getTreeModel().getTestPlan().list()) {
-        Object value =
-            node instanceof org.apache.jmeter.gui.tree.JMeterTreeNode n ? n.getTestElement() : node;
-        if (value instanceof TestElement te) {
-          p.setProperty("phase.testPlan", te.getName());
-          break;
-        }
-      }
+    filling=false;updateConfiguration();
+  }
+
+  private void selectPhase(JComboBox<String> source){
+    if(filling)return;
+    int index=source.getSelectedIndex();if(index<0)return;
+    setPhaseSelection(index);
+    renderDashboard();renderTable();
+  }
+
+  /** Keep the view state and both native controls atomic, including during JMX loading. */
+  private void setPhaseSelection(int index){
+    selectedPhase=SCOPES[index];
+    boolean wasFilling=filling;
+    filling=true;
+    try{dashboardScope.setSelectedIndex(index);tableScope.setSelectedIndex(index);}
+    finally{filling=wasFilling;}
+  }
+
+  private void resetViewBinding(){
+    // JMeter reuses one GUI for different listener elements and reopened plans.
+    // Invalidate pending workers even when two saved listeners share a capture id.
+    selectionRevision++;
+    selectionKey="";renderedRunId="";lastRefresh=0;
+    snapshot=null;groupSnapshots=Map.of();discovered=List.of();
+    boolean wasFilling=filling;filling=true;
+    try{
+      setPhaseSelection(0);
+      group.removeAllItems();
+      group.addItem(new Choice("", "No enabled Thread Groups available.", false));
+      filter.setText("");
+    }finally{filling=wasFilling;}
+    graph.setSnapshot(null);graph.setGroupSnapshots(Map.of());
+    details.setText("");diagnostics.setText("");
+    html.setEnabled(false);excel.setEnabled(false);capture.setEnabled(false);
   }
 
   @Override
   public void configure(TestElement p) {
     super.configure(p);
+    if(element!=p)resetViewBinding();
     element = (PhaseAnalyzerListener) p;
+    PhaseConfiguration.migrateLegacy(element);
     filling = true;
     units.setSelectedIndex(0);
     lastUnits=1;
@@ -401,16 +418,12 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
                   }));
     for (String k : present.keySet())
       present.get(k).setSelected(p.getPropertyAsLong("phase." + k) > 0);
-    strict.setSelected(p.getPropertyAsBoolean("phase.strict"));
-    population.setSelectedItem(p.getPropertyAsString("phase.mode", "Requests"));
-    output.setText(p.getPropertyAsString("phase.output", "phase-analyzer-results"));
-    absoluteStart.setText(p.getPropertyAsString("phase.absoluteStart"));
-    absoluteEnd.setText(p.getPropertyAsString("phase.absoluteEnd"));
     filling = false;
-    updateConfiguration();
+    attachTree();
     discover();
+    loadConfiguration();
     clock();
-    if (element.session() != null) requestSnapshot();
+    if (viewSession() != null) requestSnapshot();
     else {snapshot=null;renderDashboard();renderTable();graph.setSnapshot(null);html.setEnabled(false);excel.setEnabled(false);}
   }
 
@@ -418,13 +431,8 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   public void clearGui() {
     super.clearGui();
     element = null;
-    snapshot = null;
-    discovered = List.of();
-    filling = true;
-    group.removeAllItems();
-    group.addItem(new Choice("All", "All Thread Groups", true));
-    filling = false;
-    resetConfiguration();
+    resetViewBinding();
+    restoreDefaults();
     renderDashboard();
     renderTable();
     graph.setSnapshot(null);
@@ -433,71 +441,65 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     capture.setEnabled(false);
   }
 
-  private void resetConfiguration() {
+  private void restoreDefaults() {
     automatic.setSelected(true);
     manual.setSelected(false);
     units.setSelectedIndex(0);
     lastUnits=1;
-    for (String k : List.of("up", "down", "delay")) fields.get(k).setText("0");
+    for (String k : List.of("up", "down")) fields.get(k).setText("0");
     fields.get("hold").setText("60");
-    fields.get("apdexT").setText("500");
-    fields.get("apdexF").setText("2000");
     for (var e : present.entrySet()) e.getValue().setSelected(e.getKey().equals("hold"));
-    absoluteStart.setText("");
-    absoluteEnd.setText("");
-    strict.setSelected(false);
-    population.setSelectedItem("Requests");
     updateConfiguration();
   }
 
-  private void discover() {
-    if (!discovering.compareAndSet(false, true)) return;
-    GuiPackage gui = GuiPackage.getInstance();
-    if (gui == null) {
-      discovering.set(false);
-      return;
-    }
-    // Swing tree nodes and identity properties must only be read/mutated on EDT.
-    try {setDiscovered(PlanIdentitySync.synchronize(gui.getTreeModel().getTestPlan()));}
-    catch(Exception e){error(e);}
-    finally{discovering.set(false);}
+  private void attachTree(){
+    GuiPackage gui=GuiPackage.getInstance();if(gui==null)return;
+    if(observedTree!=gui.getTreeModel()){detachTree();observedTree=gui.getTreeModel();observedTree.addTreeModelListener(treeChanges);}
   }
-
-  void setDiscovered(List<GroupDiscovery.Entry> entries) {
-    String previous =
-        element == null ? selectedKey() : element.getPropertyAsString("phase.group", selectedKey());
-    if (discovered.equals(entries)&&previous.equals(selectedKey())) return;
-    discovered = entries;
-    filling = true;
-    group.removeAllItems();
-    List<GroupDiscovery.Entry> enabled =
-        entries.stream().filter(GroupDiscovery.Entry::enabled).toList();
-    if (enabled.size() > 1)
-      group.addItem(new Choice("All", "All Thread Groups — common steady window", true));
-    for (var e : entries) group.addItem(new Choice(e.key(), e.toString(), e.enabled()));
-    String desired=previous.equals("All")&&enabled.size()==1?enabled.get(0).key():previous;
-    if(previous.equals("All")&&enabled.size()<=1)group.insertItemAt(new Choice("All","All Thread Groups",true),0);
-    if(!desired.equals("All")&&entries.stream().noneMatch(e->e.key().equals(desired)))
-      group.addItem(new Choice(desired,"Selected Thread Group unavailable (deleted or replaced)",false));
-    for (int i = 0; i < group.getItemCount(); i++)
-      if (group.getItemAt(i).key().equals(desired))
-        group.setSelectedIndex(i);
-    filling = false;
-    if(element!=null) {
-      element.setProperty("phase.group",selectedKey());
-      try {element.setProperty("phase.catalog",Reports.mapper().writeValueAsString(entries));}
-      catch(Exception e){error(e);}
-    }
-    snapshot=null;
-    selectionRevision++;
-    graph.setSnapshot(null);renderDashboard();renderTable();
-    updateConfiguration();
+  private void detachTree(){if(observedTree!=null){observedTree.removeTreeModelListener(treeChanges);observedTree=null;}}
+  private void scheduleDiscovery(){if(discoveryQueued.compareAndSet(false,true))SwingUtilities.invokeLater(()->{discoveryQueued.set(false);discover();});}
+  private List<GroupDiscovery.Entry> currentEntries(){
+    GuiPackage gui=GuiPackage.getInstance();return gui==null?discovered:GroupDiscovery.scan(gui.getTreeModel().getTestPlan());
   }
-
-  private String selectedKey() {
-    Choice c = (Choice) group.getSelectedItem();
-    return c == null ? "All" : c.key();
+  private void discover(){
+    if(!SwingUtilities.isEventDispatchThread()){scheduleDiscovery();return;}
+    if(!discovering.compareAndSet(false,true))return;
+    try{GuiPackage gui=GuiPackage.getInstance();if(gui!=null)setDiscovered(GroupDiscovery.scan(gui.getTreeModel().getTestPlan()));}
+    catch(Exception e){error(e);}finally{discovering.set(false);}
   }
+  private void selectionChanged(){
+    String requested=selectedKey();var fresh=currentEntries();
+    boolean valid=requested.equals("All")?GroupSelection.allAvailable(fresh):fresh.stream().anyMatch(e->e.key().equals(requested)&&e.enabled());
+    if(!valid){setDiscovered(fresh);return;}
+    selectionKey=requested;if(element!=null)element.setProperty("phase.group",requested);
+    if(!fresh.equals(discovered))setDiscovered(fresh);
+    loadConfiguration();invalidateSelection();
+  }
+  private void invalidateSelection(){
+    selectionRevision++;snapshot=null;groupSnapshots=Map.of();graph.setSnapshot(null);graph.setGroupSnapshots(Map.of());
+    renderDashboard();renderTable();clock();if(viewSession()!=null)requestSnapshot();
+  }
+  void setDiscovered(List<GroupDiscovery.Entry> entries){
+    String previous=element==null?selectionKey:element.getPropertyAsString("phase.group");
+    String desired=GroupSelection.choose(entries,previous,historyAvailable());
+    if(discovered.equals(entries)&&desired.equals(selectedKey()))return;
+    discovered=List.copyOf(entries);filling=true;group.removeAllItems();
+    boolean allowAll=GroupSelection.allAvailable(entries);
+    group.addItem(new Choice("All",allowAll?"All Thread Groups":"All Thread Groups (requires 2 enabled groups)",allowAll));
+    for(var entry:entries)group.addItem(new Choice(entry.key(),entry.toString(),entry.enabled()));
+    if(entries.stream().noneMatch(GroupDiscovery.Entry::enabled))group.addItem(new Choice("","No enabled Thread Groups available.",false));
+    for(int i=0;i<group.getItemCount();i++)if(group.getItemAt(i).key().equals(desired)){group.setSelectedIndex(i);break;}
+    filling=false;selectionKey=desired;
+    if(element!=null){element.setProperty("phase.group",desired);try{element.setProperty("phase.catalog",Reports.mapper().writeValueAsString(entries));}catch(Exception e){error(e);}}
+    loadConfiguration();invalidateSelection();
+  }
+  private String selectedKey(){Choice c=(Choice)group.getSelectedItem();return c==null?"":c.key();}
+  private RunSession viewSession(){
+    RunSession run=element==null?null:element.session();
+    Path current=PhaseAnalyzerListener.resolveJmxPath();
+    return run!=null&&run.sourcePlan!=null&&current!=null&&!run.sourcePlan.equals(current)?null:run;
+  }
+  private boolean historyAvailable(){return viewSession()!=null&&viewSession().hasParticipatingGroups();}
 
   private Schedule selectedSchedule() {
     String key = selectedKey();
@@ -507,6 +509,10 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
 
   private void updateConfiguration() {
     if (filling) return;
+    boolean all=selectedKey().equals("All");
+    if(all){automatic.setSelected(true);manual.setSelected(false);}
+    manual.setEnabled(!all&&!selectedKey().isBlank());
+    automatic.setEnabled(!selectedKey().isBlank());
     boolean auto = automatic.isSelected();
     ((CardLayout) durationCards.getLayout()).show(durationCards, auto ? "Automatic" : "Manual");
     units.setVisible(!auto);
@@ -535,20 +541,6 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     }
     units.setEnabled(!auto);
     Schedule s = selectedSchedule();
-    List<Window> holds =
-        s == null
-            ? List.of()
-            : s.windows(0).stream()
-                .filter(w -> w.phase().equals("Steady load") && w.end() > w.start())
-                .toList();
-    int index = element == null ? -1 : element.getPropertyAsInt("phase.plateau", -1);
-    plateau.removeAllItems();
-    plateau.addItem("Select if multiple configured plateaus");
-    for (var w : holds)
-      plateau.addItem(
-          String.format(Locale.ROOT, "%.1f–%.1f sec", w.start() / 1000.0, w.end() / 1000.0));
-    if (index >= 0 && index < holds.size()) plateau.setSelectedIndex(index + 1);
-    plateau.setEnabled(auto && holds.size() > 1);
     if (auto) {
       if (s != null) {
         phaseInfo.setText("<html>Detected: " + escaped(discovered.stream().filter(e->e.key().equals(selectedKey())).map(GroupDiscovery.Entry::implementation).findFirst().orElse(s.method())) + "<br>"+escaped(s.method())+" · "+escaped(s.loadUnit())+"</html>");
@@ -559,13 +551,13 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
                 .filter(e -> e.key().equals(selectedKey()))
                 .map(GroupDiscovery.Entry::warning)
                 .findFirst()
-                .orElse("Select a loaded Thread Group. All uses common-window intersection.");
+                .orElse(selectedKey().equals("All")?"All uses each participating group’s own frozen configuration. Manual configuration is available for individual groups only.":"No enabled Thread Groups available.");
         phaseInfo.setText("<html>Automatic: " + escaped(warning)+"</html>");
         diagnostics.setText(warning);
       }
     } else
       phaseInfo.setText(
-          "Manual windows reference original execution start; no concurrency profile is inferred.");
+          "Manual analysis uses the selected group’s execution origin; no concurrency profile is inferred.");
     updatePreview();
   }
 
@@ -576,7 +568,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
           automatic.isSelected()
               ? selectedSchedule()
               : Schedule.phases(
-                  number("delay") * 1000,
+                  (element==null?0:element.getPropertyAsLong("phase.delay"))*1000,
                   duration("up") * 1000,
                   duration("hold") * 1000,
                   duration("down") * 1000));
@@ -587,29 +579,33 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   }
 
   private void requestSnapshot() {
-    if (element == null || element.session() == null || !busy.compareAndSet(false, true)) return;
+    if (element == null || viewSession() == null) return;
+    if(!busy.compareAndSet(false,true)){refreshPending=true;return;}
+    if(!renderedRunId.equals(Long.toString(viewSession().start)))clock();
+    refreshPending=false;
+    PhaseAnalyzerListener requestedElement=element;
     PhaseAnalyzerListener cfg = (PhaseAnalyzerListener) element.clone();
     cfg.setProperty("phase.group",selectedKey());
-    RunSession run = element.session();
+    RunSession run = viewSession();
     long requestedRevision=selectionRevision;
-    new SwingWorker<ReportSnapshot, Void>() {
-      protected ReportSnapshot doInBackground() throws Exception {
-        return ReportSnapshot.build(cfg, run);
+    new SwingWorker<ExecutionViews.Result, Void>() {
+      protected ExecutionViews.Result doInBackground() throws Exception {
+        return ExecutionViews.build(cfg, run);
       }
 
       protected void done() {
         try {
-          if (element != null && element.session() == run && requestedRevision==selectionRevision) {
-            snapshot = get();
+          if (element == requestedElement && viewSession() == run && requestedRevision==selectionRevision) {
+            var result=get();snapshot=result.selected();groupSnapshots=result.members();
             renderDashboard();
             renderTable();
-            graph.setSnapshot(snapshot);
+            graph.setSnapshot("Execution Not Started".equals(snapshot.metadata().get("executionStatus"))?null:snapshot);graph.setGroupSnapshots(groupSnapshots);
             details.setText("Test plan: " + snapshot.metadata().getOrDefault("jmxFilename","Unavailable")
                 + "\nThread Group: " + snapshot.metadata().getOrDefault("selectedThreadGroupLabel",snapshot.settings().group())
                 + "\nCapture status: " + snapshot.metadata().getOrDefault("captureStatus","Unavailable")
                 + "\nExecution status: " + snapshot.metadata().getOrDefault("executionStatus","Unavailable")
                 + "\nCaptured samples: " + snapshot.phase("Complete execution").metrics().get("samples")
-                + "\nOutput directory: " + output.getText());
+                + "\nOutput directory: " + reportDirectory());
             diagnostics.setText(
                 snapshot.analysis().methodology()
                     + "\n"
@@ -623,42 +619,56 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
             excel.setEnabled(has && !exporting.get());
                   }
         } catch (Exception e) {
-          error(e);
+          if(element==requestedElement&&viewSession()==run&&requestedRevision==selectionRevision)error(e);
         } finally {
           busy.set(false);
           clock();
-          if(element!=null&&element.session()==run&&requestedRevision!=selectionRevision)requestSnapshot();
+          if(viewSession()!=null&&(refreshPending||requestedRevision!=selectionRevision))requestSnapshot();
         }
       }
     }.execute();
   }
 
+  /** Native Clear resets results without changing saved configuration or view filters. */
+  @Override public void clearData(){
+    if(!SwingUtilities.isEventDispatchThread()){SwingUtilities.invokeLater(this::clearData);return;}
+    if(element!=null&&!PlanIdentitySync.clearingAll())element.clearData();
+    selectionRevision++;snapshot=null;groupSnapshots=Map.of();renderedRunId="";lastRefresh=0;
+    graph.setSnapshot(null);graph.setGroupSnapshots(Map.of());details.setText("");diagnostics.setText("");
+    renderDashboard();renderTable();clock();html.setEnabled(false);excel.setEnabled(false);
+  }
+
   private void clock() {
-    RunSession run=element==null?null:element.session();
+    RunSession run=viewSession();
     capture.setVisible(run!=null && element.testRunning());
     capture.setEnabled(run!=null && element.testRunning());
     if(run==null){header.setText("Ready");groupStatus.setText(shortGroup());phaseStatus.setText("Not started");elapsedStatus.setText("—");activeStatus.setText("— users");rateStatus.setText("— samples/sec");liveStatus.setText("Ready · Run JMeter to begin capture and view live metrics");progress.setValue(0);progress.setString("Ready to capture");status.setText("No execution data yet. Select a Thread Group, then start JMeter.");html.setEnabled(false);excel.setEnabled(false);return;}
     String runId=Long.toString(run.start);
     if(!renderedRunId.equals(runId)){renderedRunId=runId;snapshot=null;graph.setSnapshot(null);renderDashboard();renderTable();html.setEnabled(false);excel.setEnabled(false);}
     long end=run.end==0?System.currentTimeMillis():run.end;
-    header.setText(run.captureStatus);
-    groupStatus.setText(shortGroup());groupStatus.setToolTipText(Objects.toString(group.getSelectedItem()));phaseStatus.setText(run.end>0?run.captureStatus:currentPhase(end));elapsedStatus.setText(time((end-run.start)/1000));
+    if(!selectedKey().equals("All")&&run.groupEnd(selectedKey())>0)end=Math.min(end,run.groupEnd(selectedKey()));
+    long since=selectedKey().equals("All")?run.start:snapshot!=null?((Number)snapshot.metadata().get("executionStart")).longValue():run.groupStart(selectedKey());
+    String elapsed=selectedKey().equals("All")||run.participated(selectedKey())?time(Math.max(0,(end-since)/1000)):"—";
+    String groupExecution=selectedKey().equals("All")?run.captureStatus:run.groupStatus(selectedKey());
+    header.setText(groupExecution);
+    groupStatus.setText(shortGroup());groupStatus.setToolTipText(Objects.toString(group.getSelectedItem()));phaseStatus.setText(groupExecution.equals("Running")?currentPhase(end):groupExecution);elapsedStatus.setText(elapsed);
     capture.setText(run.isCapturing()?"Stop Capture":"Start New Capture");
     String active="—";if(snapshot!=null&&!snapshot.timeline().isEmpty()){var point=snapshot.timeline().get(snapshot.timeline().size()-1);active=display(point.active());}
-    Double liveRate=run.liveThroughput.rate(selectedKey(),element.getPropertyAsString("phase.mode","Requests"),run.start,end);
-    String rate=liveRate==null?"Warming up":display(liveRate);
+    Double liveRate=run.currentRate(selectedKey(),element.getPropertyAsString("phase.mode","Requests"),end);
+    String rate=liveRate==null?(groupExecution.equals("Running")?"Warming up":"N/A"):display(liveRate);
     rateStatus.setToolTipText("Completion rate over up to five completed one-second intervals; partial buckets excluded. Frozen at capture end. Overall throughput is shown in the KPI cards.");
     Integer workers=run.isCapturing()?element.observedUsers(selectedKey()):null;
     if(workers!=null)active=display(workers);
-    if(!element.testRunning() && run.end>0)active="0";
+    if(!element.testRunning() && run.end>0||!groupExecution.equals("Running"))active="0";
     activeStatus.setText(active+" users");rateStatus.setText(liveRate==null?rate:rate+" samples/sec");
-    liveStatus.setText(run.captureStatus+"  ·  "+time((end-run.start)/1000)+"  ·  "+(run.isCapturing()?currentPhase(end):run.captureStatus)+"  ·  "+active+" active users  ·  "+rate+(liveRate==null?"":" samples/sec (completed intervals)"));
+    liveStatus.setText(groupExecution+"  ·  "+elapsed+"  ·  "+(groupExecution.equals("Running")?currentPhase(end):groupExecution)+"  ·  "+active+" active users  ·  "+rate+(liveRate==null?"":" samples/sec (completed intervals)"));
   }
-  private String shortGroup(){Choice c=(Choice)group.getSelectedItem();String name=discovered.stream().filter(e->c!=null&&e.key().equals(c.key())).map(GroupDiscovery.Entry::name).findFirst().orElse("Select a group");return name.length()>23?name.substring(0,21)+"…":name;}
+  private String shortGroup(){Choice c=(Choice)group.getSelectedItem();String name=discovered.stream().filter(e->c!=null&&e.key().equals(c.key())).map(GroupDiscovery.Entry::name).findFirst().orElse(c!=null&&c.key().equals("All")?"All Thread Groups":"No enabled Thread Groups available.");return name.length()>23?name.substring(0,21)+"…":name;}
   private static String time(long seconds){return String.format(Locale.ROOT,"%02d:%02d:%02d",seconds/3600,(seconds/60)%60,seconds%60);}
   private static String escaped(Object s){return Objects.toString(s,"").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
 
   private String currentPhase(long t) {
+    if(selectedKey().equals("All"))return "Per-group phases — independent schedules";
     if (snapshot == null) return "Phase unavailable";
     for (var p : snapshot.phases())
       if (!p.name().equals("Complete execution"))
@@ -670,7 +680,8 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     var p =
         snapshot == null
             ? null
-            : snapshot.phase(Objects.toString(dashboardScope.getSelectedItem(), "Steady load"));
+            : snapshot.phase(selectedPhase);
+    if(snapshot!=null&&"Execution Not Started".equals(snapshot.metadata().get("executionStatus")))p=null;
     String[] keys = {"samples", "averageMs", "p90Ms", "p95Ms", "errorPercent", "samplesPerSecond"},
         suffix = {"", " ms", " ms", " ms", " %", " samples/s"};
     for (int i = 0; i < 6; i++) {
@@ -678,6 +689,9 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
       kpis[i].setText(v == null ? "—" : display(v) + suffix[i]);
       kpis[i].setToolTipText(p == null ? "No execution data" : p.status() + "; " + p.explanation());
     }
+    if(p==null)selectedPhaseMetrics.setText("No execution data for the selected Thread Group.");
+    else {var m=p.metrics();Object n=m.get("samples"),passed=m.get("successful");
+      selectedPhaseMetrics.setText(label(selectedPhase)+" · "+p.status()+" · Passed "+display(passed)+" · Failed "+display(m.get("failed"))+" · Pass % "+(n instanceof Number total&&total.longValue()>0&&passed instanceof Number ok?display(ok.doubleValue()*100/total.doubleValue()):"—")+" · Median "+display(m.get("medianMs"))+" ms · P99 "+display(m.get("p99Ms"))+" ms · Min / Max "+display(m.get("minMs"))+" / "+display(m.get("maxMs"))+" ms");}
     phaseCards(dashboardPhases);
     phaseCards(livePhases);
     if (snapshot != null) {
@@ -685,9 +699,13 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
       Double duration = c.configuredSeconds();
       double elapsed =
           (((Number) snapshot.metadata().get("executionEnd")).longValue()
-                  - ((Number) snapshot.metadata().get("testStart")).longValue())
+                  - ((Number) snapshot.metadata().get("executionStart")).longValue())
               / 1000.0;
       progress.setIndeterminate(false);
+      if(selectedKey().equals("All")){
+        progress.setValue("Completed".equals(snapshot.metadata().get("executionStatus"))?100:0);
+        progress.setString("All participating groups — independent schedules");
+      } else
       if (duration != null && duration > 0) {
         progress.setValue((int) Math.min(100, Math.max(0, elapsed * 100 / duration)));
         progress.setString(
@@ -707,11 +725,11 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     panel.removeAll();panel.setLayout(new BorderLayout());
     DefaultTableModel model=new DefaultTableModel(new String[]{"Phase","Status","Duration (s)","Samples","Average (ms)","P95 (ms)","Error %"},0){public boolean isCellEditable(int row,int col){return false;}};
     for(String name:ReportSnapshot.PHASES){var phase=snapshot==null?null:snapshot.phase(name);model.addRow(new Object[]{label(name),phase==null?"Not started":phase.status(),phase==null?"—":display(phase.configuredSeconds()),phase==null?"—":display(phase.metrics().get("samples")),phase==null?"—":display(phase.metrics().get("averageMs")),phase==null?"—":display(phase.metrics().get("p95Ms")),phase==null?"—":display(phase.metrics().get("errorPercent"))});}
-    JTable phases=new JTable(model);phases.setRowHeight(Math.max(22,phases.getFontMetrics(phases.getFont()).getHeight()+6));phases.setFillsViewportHeight(false);phases.getTableHeader().setReorderingAllowed(false);phases.getColumnModel().getColumn(0).setPreferredWidth(160);phases.getColumnModel().getColumn(1).setPreferredWidth(140);JScrollPane scroll=new JScrollPane(phases);scroll.setPreferredSize(new Dimension(800,phases.getRowHeight()*4+phases.getTableHeader().getPreferredSize().height+5));panel.add(scroll);panel.revalidate();panel.repaint();
+    JTable phases=new JTable(model);phases.setRowHeight(Math.max(22,phases.getFontMetrics(phases.getFont()).getHeight()+6));phases.setFillsViewportHeight(false);phases.getTableHeader().setReorderingAllowed(false);phases.getColumnModel().getColumn(0).setPreferredWidth(160);phases.getColumnModel().getColumn(1).setPreferredWidth(140);JScrollPane scroll=new JScrollPane(phases);scroll.setPreferredSize(new Dimension(800,phases.getRowHeight()*4+phases.getTableHeader().getPreferredSize().height+5));phases.setRowSelectionAllowed(true);phases.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);phases.setRowSelectionInterval(ReportSnapshot.PHASES.indexOf(selectedPhase),ReportSnapshot.PHASES.indexOf(selectedPhase));panel.add(scroll);panel.revalidate();panel.repaint();
   }
 
   private void renderTable() {
-    String phase = Objects.toString(tableScope.getSelectedItem(), "Steady load");
+    String phase = selectedPhase;
     List<String> headers = new ArrayList<>(ExcelReport.HEADERS);
     headers.add(0, "Population");
     DefaultTableModel model =
@@ -720,24 +738,16 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
             return false;
           }
         };
-    if (snapshot != null)
-      for (var v : snapshot.analysis().views())
-        if (v.window().phase().equals(phase))
-          for (var row : v.rows()) {
-            List<Object> values = new ArrayList<>();
-            values.add(v.kind());
-            values.add(
-                snapshot
-                    .metadata()
-                    .getOrDefault("selectedThreadGroupLabel", snapshot.settings().group()));
-            for (String key : ExcelReport.KEYS)
-              values.add(row.get(key) == null ? "N/A" : row.get(key));
-            model.addRow(values.toArray());
-          }
+    if(snapshot!=null&&!"Execution Not Started".equals(snapshot.metadata().get("executionStatus"))){
+      if(selectedKey().equals("All")&&!groupSnapshots.isEmpty()){
+        for(var member:groupSnapshots.entrySet())appendRows(model,member.getValue(),phase,false);
+        appendRows(model,snapshot,phase,true);
+      }else appendRows(model,snapshot,phase,null);
+    }
     table.setModel(model);
     tableCards.setPreferredSize(new Dimension(800,model.getRowCount()==0?44:160));
     ((CardLayout)tableCards.getLayout()).show(tableCards,model.getRowCount()==0?"Empty":"Data");
-    tableEmpty.setText(snapshot==null?"Run a test to see captured API metrics.":"No samples captured in the selected phase.");
+    tableEmpty.setText(snapshot==null?"Run a test to see captured API metrics.":"Execution Not Started".equals(snapshot.metadata().get("executionStatus"))?"Execution has not started for this Thread Group.":"No samples captured in the selected phase.");
     table.setAutoCreateRowSorter(true);
     var sorter = (TableRowSorter<?>) table.getRowSorter();
     for (int c = 3; c < model.getColumnCount(); c++)
@@ -760,6 +770,14 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
     for (int c = 3; c < table.getColumnCount(); c++)
       table.getColumnModel().getColumn(c).setCellRenderer(numeric);
     filterRows();
+  }
+
+  private void appendRows(DefaultTableModel model,ReportSnapshot data,String phase,Boolean totalsOnly){
+    for(var view:data.analysis().views())if(view.window().phase().equals(phase))for(var row:view.rows()){
+      boolean total="TOTAL".equals(row.get("label"));if(totalsOnly!=null&&total!=totalsOnly)continue;
+      List<Object> values=new ArrayList<>();values.add(view.kind());values.add(data.metadata().getOrDefault("selectedThreadGroupLabel",data.settings().group()));
+      for(String key:ExcelReport.KEYS)values.add(row.get(key)==null?"N/A":row.get(key));model.addRow(values.toArray());
+    }
   }
 
   private void filterRows() {
@@ -790,7 +808,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
   private static JLabel nativeLabel(String text,int ignoredSize,boolean bold){JLabel l=new JLabel(text);if(bold)l.setFont(l.getFont().deriveFont(Font.BOLD));return l;}
 
   private void captureAction() {
-    if (element == null || !element.testRunning()) return;
+    if (element == null || viewSession()==null || !element.testRunning()) return;
     capture.setEnabled(false);
     if (element.session().isCapturing()) {
       element
@@ -831,6 +849,8 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
       }.execute();
   }
 
+  private String reportDirectory(){return element==null?"phase-analyzer-results":element.getPropertyAsString("phase.output","phase-analyzer-results");}
+
   private void export(String extension) {
     ReportSnapshot data = snapshot;
     if (data == null
@@ -840,7 +860,7 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
       error(new IllegalStateException("No captured samples to export"));
       return;
     }
-    JFileChooser chooser=new JFileChooser(lastDirectory==null?new File(output.getText().isBlank()?".":output.getText()):lastDirectory.toFile());
+    JFileChooser chooser=new JFileChooser(lastDirectory==null?new File(reportDirectory().isBlank()?".":reportDirectory()):lastDirectory.toFile());
     chooser.setDialogTitle(extension.equals("html")?"Save HTML report":"Save Excel report");chooser.setFileFilter(new FileNameExtensionFilter(extension.equals("html")?"HTML report (*.html)":"Excel workbook (*.xlsx)",extension));chooser.setAcceptAllFileFilterUsed(false);
     chooser.setSelectedFile(new File(Reports.exportFilename(data,extension)));
     if(chooser.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;
@@ -908,89 +928,6 @@ public final class PhaseAnalyzerGui extends AbstractListenerGui implements Scrol
         catch(IOException failure) {out.close();Files.deleteIfExists(destination);throw failure;}
       }
     } finally {try(var files=Files.list(staging)){for(Path f:files.toList())Files.deleteIfExists(f);}Files.deleteIfExists(staging);}
-  }
-
-  private void importJtl() {
-    JFileChooser chooser = new JFileChooser(lastDirectory == null ? null : lastDirectory.toFile());
-    if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
-    Path source = chooser.getSelectedFile().toPath();
-    if (element != null && element.testRunning()) {
-      error(new IllegalStateException("Wait for JMeter to finish before importing offline data"));
-      return;
-    }
-    if (element == null) element = (PhaseAnalyzerListener) createTestElement();
-    PhaseAnalyzerListener cfg = element;
-    new SwingWorker<RunSession, Void>() {
-      protected RunSession doInBackground() throws Exception {
-        long[] bounds = {Long.MAX_VALUE, 0};
-        List<String> warnings =
-            SampleStore.scan(
-                source,
-                s -> {
-                  bounds[0] = Math.min(bounds[0], s.start());
-                  bounds[1] = Math.max(bounds[1], s.end());
-                });
-        if (bounds[0] == Long.MAX_VALUE) throw new IOException("No sample records in JTL");
-        RunSession run =
-            new RunSession(
-                Path.of(cfg.getPropertyAsString("phase.output", "phase-analyzer-results")),
-                bounds[0]);
-        try {
-          SampleStore.scan(
-              source,
-              s -> {
-                try {
-                  run.store.append(s);
-                } catch (IOException e) {
-                  throw new UncheckedIOException(e);
-                }
-              });
-          run.stopAccepting("Offline recording");
-          run.finish();
-          run.end = bounds[1];
-          Path metadata = source.resolveSibling("metadata.json");
-          if (Files.exists(metadata)) {
-            var tree = Reports.mapper().readTree(metadata.toFile());
-            for (var node : tree.path("groups")) {
-              RunSession.Group g = Reports.mapper().convertValue(node, RunSession.Group.class);
-              run.groups.put(g.name(), g);
-            }
-          }
-          Path load = source.resolveSibling("load.csv");
-          if (Files.exists(load))
-            Files.copy(
-                load, run.directory.resolve("load.csv"), StandardCopyOption.REPLACE_EXISTING);
-          for (String w : warnings) run.warning(w);
-          run.warning(
-              "Offline source: "
-                  + source
-                  + ". Without companion metadata, manual reference is earliest sample start, not"
-                  + " the true test start.");
-          return run;
-        } catch (Exception e) {
-          run.stopAccepting("Failed");
-          run.finish();
-          throw e;
-        }
-      }
-
-      protected void done() {
-        try {
-          RunSession run = get();
-          PhaseAnalyzerListener.SESSIONS.put(cfg.getPropertyAsString("phase.id"), run);
-          automatic.setSelected(!run.groups.isEmpty());
-          manual.setSelected(!automatic.isSelected());
-          if (run.groups.isEmpty()) {
-            absoluteStart.setText(Long.toString(run.store.first));
-            absoluteEnd.setText(Long.toString(run.store.last));
-          }
-          write(cfg);
-          requestSnapshot();
-        } catch (Exception e) {
-          error(e);
-        }
-      }
-    }.execute();
   }
 
   private void error(Throwable e) {

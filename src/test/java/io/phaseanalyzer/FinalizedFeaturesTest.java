@@ -28,6 +28,13 @@ class FinalizedFeaturesTest {
         run.accept(
             new Sample(
                 run.start, 0, "batch", "G", "local", i % 2 == 0, 10, 5, 0, 0, 1, "200", false));
+      // An instantaneous [start,start) capture has no elapsed window. Fast
+      // runners can enqueue this whole fixture within one clock tick. Wait for
+      // a positive capture interval without weakening the population checks.
+      long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+      while (System.currentTimeMillis() <= run.start && System.nanoTime() < deadline)
+        Thread.sleep(1);
+      assertTrue(System.currentTimeMillis() > run.start, "Capture clock did not advance");
       ReportSnapshot s = ReportSnapshot.build(c, run);
       assertEquals("Partial Report", s.metadata().get("executionStatus"));
       assertEquals(
@@ -78,7 +85,7 @@ class FinalizedFeaturesTest {
       assertEquals(2, run.groups.size());
       assertEquals("Unavailable", s.phase("Steady load").status());
       assertTrue(s.phase("Steady load").metrics().isEmpty());
-      assertTrue(s.phase("Complete execution").configuredSeconds() >= 63);
+      assertNull(s.phase("Complete execution").configuredSeconds(),"Runtime epochs remain pending until native group startup");
     } finally {
       run.stopAccepting("Stopped");
       run.finish();

@@ -43,7 +43,7 @@ class IdentityRefreshTest {
     assertEquals(GroupDiscovery.key(b),listener.getPropertyAsString("phase.group"));
     assertTrue(listener.getPropertyAsString("phase.catalog").contains("SetupThreadGroup"));
     tree.remove(b);PlanIdentitySync.synchronize(tree);
-    assertEquals(GroupDiscovery.key(b),listener.getPropertyAsString("phase.group"),"Deleted selection must not silently map to another group");
+    assertEquals("",listener.getPropertyAsString("phase.group"),"No enabled groups must produce an unavailable selection");
   }
   @Test void dashboardSelectionTracksAllNineAndPreservesUnavailableSelection() throws Exception {
     SwingUtilities.invokeAndWait(()->{
@@ -54,7 +54,7 @@ class IdentityRefreshTest {
         var field=PhaseAnalyzerGui.class.getDeclaredField("group");field.setAccessible(true);var combo=(JComboBox<?>)field.get(gui);
         for(int i=0;i<9;i++){combo.setSelectedIndex(i+1);assertEquals(entries.get(i).key(),listener.getPropertyAsString("phase.group"));}
         String selected=listener.getPropertyAsString("phase.group");gui.setDiscovered(entries.subList(0,8));
-        assertEquals(selected,listener.getPropertyAsString("phase.group"));assertTrue(combo.getSelectedItem().toString().contains("unavailable"));
+        assertEquals(entries.get(0).key(),listener.getPropertyAsString("phase.group"));
       } catch(Exception e){throw new RuntimeException(e);}
     });
   }

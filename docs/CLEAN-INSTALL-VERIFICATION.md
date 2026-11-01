@@ -1,3 +1,7 @@
+> Historical build evidence. See [current final validation](FINAL_VALIDATION_20261101.md) for latest counts and remaining limitations.
+
+> Historical evidence. For the current unpublished build, see [current validation](FRESH_VALIDATION_20261030.md).
+
 # Released JAR installation verification
 
 Verified on 25 October 2026, Windows, Java 17, Apache JMeter 5.6.3.

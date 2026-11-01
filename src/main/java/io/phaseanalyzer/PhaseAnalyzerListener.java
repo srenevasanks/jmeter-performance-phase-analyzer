@@ -11,7 +11,7 @@ import org.apache.jmeter.threads.*;
 
 /** JMeter discovers the associated GUI by class scanning; no fictitious service registry. */
 public final class PhaseAnalyzerListener extends AbstractTestElement
-    implements SampleListener, TestStateListener, ThreadListener, NoThreadClone {
+    implements SampleListener, TestStateListener, ThreadListener, NoThreadClone, Clearable {
   private static final long serialVersionUID = 1L;
   static final Map<String, RunSession> SESSIONS = new ConcurrentHashMap<>();
   private static final Map<String, PhaseAnalyzerListener> RUNNING = new ConcurrentHashMap<>();
@@ -22,13 +22,15 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
   private transient boolean parallelSafe = true;
   private transient Map<String, java.util.concurrent.atomic.AtomicInteger> activeCounts = new ConcurrentHashMap<>();
   private transient ExecutionEvidence evidence;
+  private record WorkerContext(AbstractThreadGroup group,JMeterThread thread){}
+  private transient ThreadLocal<WorkerContext> workerContext=new ThreadLocal<>();
 
   public PhaseAnalyzerListener() {
     installIdentitySync();
     setProperty("phase.id", UUID.randomUUID().toString());
     setProperty("phase.automatic", true);
     setProperty("phase.mode", "Requests");
-    setProperty("phase.group", "All");
+    setProperty("phase.group", "");
     setProperty("phase.hold", 60L);
     setProperty("phase.apdexT", 500L);
     setProperty("phase.apdexF", 2000L);
@@ -48,13 +50,37 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
     return SESSIONS.get(getPropertyAsString("phase.id"));
   }
 
-  public void testStarted() {
+  /** Clear callbacks serialize with sample delivery: samples delivered after this boundary
+   * belong to the replacement capture, including requests already in flight. */
+  @Override public synchronized void clearData(){
+    PhaseAnalyzerListener live=RUNNING.get(getPropertyAsString("phase.id"));
+    if(live!=null&&live!=this){live.clearData();return;}
+    RunSession old=session();if(old==null)return;
+    try{
+      if(testRunning&&old.isCapturing()){
+        RunSession next=old.emptyCapture();
+        if(activeGroups!=null)for(var entry:activeGroups.entrySet()){
+          int count=activeCounts.getOrDefault(entry.getKey(),new java.util.concurrent.atomic.AtomicInteger()).get();
+          if(count>0)next.seedActiveThreads(entry.getValue(),count);
+        }
+        old.stopAccepting("Cleared");
+        SESSIONS.put(getPropertyAsString("phase.id"),next);
+      }else{
+        old.stopAccepting("Cleared");SESSIONS.remove(getPropertyAsString("phase.id"),old);
+      }
+      CompletableFuture.runAsync(old::cleanup);
+    }catch(Exception e){throw new IllegalStateException("Cannot clear phase analyzer results",e);}
+  }
+
+  public synchronized void testStarted() {
     try {
       RunSession old = session();
       if (old != null) { old.finish(); old.cleanup(); }
       if (evidence != null) evidence.close();
       evidence = new ExecutionEvidence();
       catalog = readCatalog();
+      PhaseConfiguration.migrateLegacy(this);
+      if(!catalog.isEmpty())setProperty("phase.group",GroupSelection.choose(catalog,getPropertyAsString("phase.group")));
       parallelSafe =
           !getPropertyAsBoolean("phase.serialized")
               && catalog.stream().filter(GroupDiscovery.Entry::enabled)
@@ -69,7 +95,9 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
           new RunSession(
               Path.of(getPropertyAsString("phase.output", "phase-analyzer-results")), jmStart);
       run.jmxFilename = resolveJmxFilename();
+      run.sourcePlan = resolveJmxPath();
       run.prime(catalog, parallelSafe);
+      run.freezeConfiguration(this);
       SESSIONS.put(getPropertyAsString("phase.id"), run);
       testRunning = true;
       RUNNING.put(getPropertyAsString("phase.id"), this);
@@ -90,9 +118,14 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
                 + "; global observed load cannot be reconstructed by this listener.");
   }
 
-  public void threadStarted() {
+  public synchronized void threadStarted() {
     RunSession r = session();
     var g = JMeterContextService.getContext().getThreadGroup();
+    if(g!=null&&getPropertyAsString("phase.group").isBlank()){
+      setProperty("phase.group",GroupDiscovery.key(g));
+      if(r!=null)r.bindInitialSelection(GroupDiscovery.key(g));
+    }
+    workerContext.set(new WorkerContext(g,JMeterContextService.getContext().getThread()));
     if (r != null && r.isCapturing()) { r.groupStarted(g); r.recordThreadStart(g); }
     if (g != null && activeCounts != null) activeCounts.computeIfAbsent(GroupDiscovery.key(g), key -> new java.util.concurrent.atomic.AtomicInteger()).incrementAndGet();
     if (g != null && activeGroups != null) activeGroups.put(GroupDiscovery.key(g), g);
@@ -142,8 +175,11 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
             Path.of(getPropertyAsString("phase.output", "phase-analyzer-results")),
             originalTestStart);
     next.jmxFilename = old == null ? resolveJmxFilename() : old.jmxFilename;
+    next.sourcePlan = old == null ? resolveJmxPath() : old.sourcePlan;
     next.prime(catalog, parallelSafe);
+    next.freezeConfiguration(this);
     if (activeGroups != null) for (var g : activeGroups.values()) {
+      if(activeCounts.getOrDefault(GroupDiscovery.key(g),new java.util.concurrent.atomic.AtomicInteger()).get()==0&&g.numberOfActiveThreads()==0&&!RunSession.hasLiveStarter(g))continue;
       next.groupStarted(g);
       next.seedActiveThreads(g, activeCounts.getOrDefault(GroupDiscovery.key(g), new java.util.concurrent.atomic.AtomicInteger()).get());
     }
@@ -163,6 +199,14 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
     if (name == null || name.isBlank()) return null;
     try { return Path.of(name).getFileName().toString(); }
     catch (InvalidPathException e) { return null; }
+  }
+
+  static Path resolveJmxPath() {
+    var gui=org.apache.jmeter.gui.GuiPackage.getInstance();
+    String name=gui==null?org.apache.jmeter.services.FileServer.getFileServer().getScriptName():gui.getTestPlanFile();
+    if(name==null||name.isBlank())return null;
+    try{return Path.of(name).toAbsolutePath().normalize();}
+    catch(InvalidPathException unavailable){return null;}
   }
 
   private List<GroupDiscovery.Entry> readCatalog() {
@@ -202,14 +246,18 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
     return List.of();
   }
 
-  public void threadFinished() {
-    var g = JMeterContextService.getContext().getThreadGroup();
+  public synchronized void threadFinished() {
+    // JMeter clears JMeterContext before this callback. Keep the actual native
+    // association captured at threadStarted rather than querying cleared state.
+    WorkerContext worker=workerContext.get();
+    var g = worker==null?null:worker.group();
     RunSession run = session();
-    if (run != null && run.isCapturing()) run.recordThreadFinish(g);
+    if (run != null && run.isCapturing()) run.recordThreadFinish(g,worker==null?null:worker.thread());
     if (g != null && activeCounts != null) activeCounts.computeIfAbsent(GroupDiscovery.key(g), key -> new java.util.concurrent.atomic.AtomicInteger()).updateAndGet(n -> Math.max(0, n - 1));
+    workerContext.remove();
   }
 
-  public void sampleOccurred(SampleEvent event) {
+  public synchronized void sampleOccurred(SampleEvent event) {
     RunSession run = session();
     if (run == null || !run.isCapturing()) return;
     var r = event.getResult();
@@ -311,7 +359,7 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
       g = r.groups.values().iterator().next();
     Long target = null;
     if (!getPropertyAsBoolean("phase.automatic", true))
-      target = getPropertyAsLong("phase.target", 1);
+      target = getPropertyAsString("phase.target").isBlank()?null:getPropertyAsLong("phase.target");
     else if (g != null && g.schedule() != null) target = (long) g.schedule().peak();
     m.put("configuredTargetLoad", target);
     if (!getPropertyAsBoolean("phase.automatic", true))
@@ -332,7 +380,7 @@ public final class PhaseAnalyzerListener extends AbstractTestElement
     return m;
   }
 
-  public void testEnded() {
+  public synchronized void testEnded() {
     testRunning = false;
     RUNNING.remove(getPropertyAsString("phase.id"),this);
     RunSession r = session();

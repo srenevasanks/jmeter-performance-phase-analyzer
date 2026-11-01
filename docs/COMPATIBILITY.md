@@ -1,25 +1,17 @@
-# Compatibility and evidence scope
+# Compatibility — current local validation
 
-Verified baseline: Apache JMeter 5.6.3, Java 17, Windows; optional Custom Thread Groups 3.1.1. Other versions/platforms are not claimed as fully tested. **All nine implementations retain Partial overall validation status.** Passing scoped calculations or regression tests does not establish full certification.
+All nine executed independently on Windows. Scoped calculations passed; overall status is Partial. See [full matrix, native scheduling limitations and missing evidence](FINAL_VALIDATION_20261101.md). macOS GUI verification remains pending.
 
-The published [sample report pairs](../examples/README.md) come from nine independent v1.1.1 local mock executions: 51,177 HTTP samples, 13,492 JTL/report comparisons and zero calculation discrepancies. All nine HTML reports passed offline browser controls/themes at 1366×768 and 1920×1080. All 63 worksheets and nine native charts were inspected in WPS. The older 256,643-sample batch is separate historical evidence and is not the population of the published examples.
+| Group | Samples | Independent checks | Status | Evidence |
+|---|---:|---:|---|---|
+| 01-Standard | 1,765 | 1,207 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/01-Standard/README.md) · [HTML](../examples/standard/report.html) · [Excel](../examples/standard/report.xlsx) |
+| 02-Ultimate | 1,688 | 1,390 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/02-Ultimate/README.md) · [HTML](../examples/ultimate/report.html) · [Excel](../examples/ultimate/report.xlsx) |
+| 03-Stepping | 1,748 | 1,390 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/03-Stepping/README.md) · [HTML](../examples/stepping/report.html) · [Excel](../examples/stepping/report.xlsx) |
+| 04-Concurrency | 1,767 | 1,207 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/04-Concurrency/README.md) · [HTML](../examples/concurrency/report.html) · [Excel](../examples/concurrency/report.xlsx) |
+| 05-Arrivals | 1,620 | 1,207 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/05-Arrivals/README.md) · [HTML](../examples/arrivals/report.html) · [Excel](../examples/arrivals/report.xlsx) |
+| 06-FreeFormArrivals | 1,389 | 1,390 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/06-FreeFormArrivals/README.md) · [HTML](../examples/free-form-arrivals/report.html) · [Excel](../examples/free-form-arrivals/report.xlsx) |
+| 07-OpenModel | 1,400 | 1,383 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/07-OpenModel/README.md) · [HTML](../examples/open-model/report.html) · [Excel](../examples/open-model/report.xlsx) |
+| 08-SetUp | 1,777 | 1,207 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/08-SetUp/README.md) · [HTML](../examples/setup/report.html) · [Excel](../examples/setup/report.xlsx) |
+| 09-TearDown | 1,777 | 1,207 | PASS (scoped metrics) / Partial overall | [Screenshots](../screenshots/validation/09-TearDown/README.md) · [HTML](../examples/teardown/report.html) · [Excel](../examples/teardown/report.xlsx) |
 
-| Thread Group | Provider | Native gradual ramp-down in supplied plan | v1.1.2 evidence | Overall |
-|---|---|---|---|---|
-| Standard | JMeter 5.6.3 | Absent | New short API/report run: 225 samples; native clock/selection regression | Partial |
-| Ultimate | Custom Thread Groups 3.1.1 | Scheduled | New native clock/selection regression; prior API evidence reused | Partial |
-| Stepping | Custom Thread Groups 3.1.1 | Discrete steps | New native clock/selection regression; prior API evidence reused | Partial |
-| Concurrency | Custom Thread Groups 3.1.1 | Absent | New native clock/selection regression; prior API evidence reused | Partial |
-| Arrivals | Custom Thread Groups 3.1.1 | Absent | New native clock/selection regression; prior API evidence reused | Partial |
-| Free-Form Arrivals | Custom Thread Groups 3.1.1 | Decreasing arrival rate | New native clock/selection regression; prior API evidence reused | Partial |
-| Open Model | JMeter 5.6.3 | Decreasing arrival rate | New short API/report run: 210 samples; native clock/selection regression | Partial |
-| setUp | JMeter 5.6.3 | Absent | New short API/report run: 224 samples; native clock/selection regression | Partial |
-| tearDown | JMeter 5.6.3 | Absent | New native clock/selection regression; prior API evidence reused | Partial |
-
-Native phases come from configuration, not observed load. Missing native ramp-down remains unavailable. Open groups use arrival-rate units; no concurrent-user target is fabricated. setUp/tearDown follow their native JMeter lifecycle.
-
-Targeted patch checks independently reconciled 659 actual samples and 2,432 report/timeline checks with zero calculation differences. All 72 live completed-window rate readings matched JTL completion timestamps. First-observed native clock anchors matched; Standard/setUp worker clocks varied by 2–3 ms. Open Model had two native-versus-listener user observations differing by one worker at distinct sample/callback instants. Exact continuous active-worker agreement remains unverified. Historical Arrivals evidence also contained a native arrival/completion-fact discrepancy despite preserving all actual HTTP samples.
-
-Final interactive checks of corrected GUI Start/Save switching, save/reopen and completed-state rendering are still pending after computer-use activation/capture failed. The real native editor commit regression passes; final successful interactive execution was not recorded. Arbitrary complex/multiple-row schedules, dynamic changes, distributed execution and every duplicate-name edge case are not exhaustively certified. Unsupported/ambiguous schedules are disclosed or require explicit manual analytical windows.
-
-See [validation details](VALIDATION.md) and [native configuration screenshots](../screenshots/README.md). A Partial result is not a claim that calculations failed, nor permission to invent unavailable phases.
+Latest screenshot audit: [390 original images plus one targeted recapture; defects and evidence limits](SCREENSHOT_AUDIT_20261101.md). Overall remains **Partial**; cached popup labels, completed preview/caption and combined HTML load wording are not clean passes.
