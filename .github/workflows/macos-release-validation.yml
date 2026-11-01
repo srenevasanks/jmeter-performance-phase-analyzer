@@ -25,7 +25,15 @@ jobs:
           { sw_vers; uname -m; java -version; } > evidence/environment.txt 2>&1
           curl -fL --retry 3 "$RELEASE/jmeter-performance-phase-analyzer-1.0.0.jar" -o downloads/jmeter-performance-phase-analyzer-1.0.0.jar
           curl -fL --retry 3 "$RELEASE/SHA256SUMS.txt" -o downloads/SHA256SUMS.txt
-          (cd downloads && shasum -a 256 -c SHA256SUMS.txt) | tee evidence/release-checksum.txt
+          python3 - <<'PY' | tee evidence/release-checksum.txt
+          import hashlib
+          from pathlib import Path
+          expected, name = Path('downloads/SHA256SUMS.txt').read_text().split()
+          assert name == 'jmeter-performance-phase-analyzer-1.0.0.jar'
+          actual = hashlib.sha256(Path('downloads', name).read_bytes()).hexdigest()
+          assert actual == expected.lower(), 'Published SHA-256 mismatch'
+          print(name, actual, 'OK (published checksum; CRLF-safe parsing)')
+          PY
           URL=https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
           curl -fL --retry 3 "$URL" -o downloads/apache-jmeter-5.6.3.tgz
           curl -fL --retry 3 "$URL.sha512" -o downloads/apache-jmeter-5.6.3.tgz.sha512
