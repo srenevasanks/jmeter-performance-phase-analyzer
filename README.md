@@ -4,7 +4,7 @@
 
 Native Swing listener for ramp-up, steady-load, ramp-down and complete-execution API performance analysis. Java 17 · Apache JMeter 5.6.3 · Apache License 2.0. One cross-platform JAR.
 
-**Updated source version: 1.1.2. Release publication awaits separate approval.** Final local verification: 95 automated tests and 38,308 independent comparisons, zero numerical discrepancies. Overall status remains **Partial** due to the explicit GUI/evidence limits in [current validation](docs/FINAL_VALIDATION_20261101.md). The audit itself did not publish changes.
+**Official release: 1.0.0.** Final local verification: 95 automated tests and 38,308 independent comparisons, zero numerical discrepancies. Overall status remains **Partial** due to the explicit GUI/evidence limits in [current validation](docs/FINAL_VALIDATION_20261101.md). The audit itself did not publish changes.
 
 [Current gallery](screenshots/validation/README.md) · [Actual sample reports](examples/README.md) · [Compatibility](docs/COMPATIBILITY.md)
 
@@ -83,7 +83,7 @@ All nine ran independently using actual local mock HTTP samples. Numerical compa
 | Custom Thread Groups | Optional 3.1.1, required only for Ultimate, Stepping, Concurrency, Arrivals and Free-Form Arrivals workloads; install its normal dependencies, including common library 0.7 |
 | Maven | 3.9.x + JDK 17, development/build only |
 
-1. Download the published [`jmeter-performance-phase-analyzer-1.1.1.jar`](https://github.com/srenevasanks/jmeter-performance-phase-analyzer/releases/download/v1.1.1/jmeter-performance-phase-analyzer-1.1.1.jar).
+1. Download the published [`jmeter-performance-phase-analyzer-1.0.0.jar`](https://github.com/srenevasanks/jmeter-performance-phase-analyzer/releases/download/v1.0.0/jmeter-performance-phase-analyzer-1.0.0.jar).
 2. Close JMeter and move older versions of this analyzer outside `<JMETER_HOME>/lib/ext`.
 3. Copy the JAR to `<JMETER_HOME>/lib/ext/`, keeping exactly one analyzer version.
 4. Restart JMeter 5.6.3 with Java 17.
@@ -110,7 +110,7 @@ cd jmeter-performance-phase-analyzer
 mvn --batch-mode --no-transfer-progress clean verify
 ```
 
-Artifact: `target/jmeter-performance-phase-analyzer-1.1.2.jar`. The complete **76-test** suite includes regression and embedded native JMeter executions without a private service. GitHub Actions runs the same Maven command on Java 17. Generated outputs, raw JTL, logs, credentials and developer-only evidence remain excluded; only the explicitly curated example HTML/XLSX files are committed.
+Artifact: `target/jmeter-performance-phase-analyzer-1.0.0.jar`. The complete **95-test** suite includes regression and embedded native JMeter executions without a private service. GitHub Actions runs the same Maven command on Java 17. Generated outputs, raw JTL, logs, credentials and developer-only evidence remain excluded; only the explicitly curated example HTML/XLSX files are committed.
 
 ## Known limitations
 

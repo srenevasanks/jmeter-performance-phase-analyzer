@@ -1,3 +1,5 @@
+> Historical validation record: version labels and checksums below identify the development artifact actually tested. The current official release is **1.0.0**, a metadata-only renumbering; screenshots, sample metrics and original test evidence are preserved.
+
 > Historical build evidence. See [current final validation](FINAL_VALIDATION_20261101.md) for latest counts and remaining limitations.
 
 # Phase selection correction — 31 October 2026

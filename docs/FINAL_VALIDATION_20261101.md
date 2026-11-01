@@ -1,3 +1,5 @@
+> Historical validation record: version labels and checksums below identify the development artifact actually tested. The current official release is **1.0.0**, a metadata-only renumbering; screenshots, sample metrics and original test evidence are preserved.
+
 # Final local validation — 2026-11-01
 
 **Overall: Partial.** All available numerical comparisons passed. Remaining GUI/evidence limits are explicitly listed below. No production Java changes, commit, push, tag or release were made during this final evidence pass.
@@ -63,7 +65,7 @@ These are distinct executions, not interchangeable screenshot totals. Every comp
 
 Latest JAR is installed; original Master_ThreadGroups.jmx is left open without execution. Its saved enabled states are preserved. The test-plan display name still contains an older version; it is not the loaded JAR version.
 
-No release/version/tag was changed. Publishing v1.0.0 after v1.1.x reverses normal version ordering and may not be selected as an update by tooling. Prefer the next forward stable version (1.1.2 for fixes, or 1.2.0 for these functional additions) after manual approval; never delete or retag earlier releases to reset numbering.
+The audit did not change releases. Subsequently the maintainer explicitly selected 1.0.0 as the first official release and authorized removal of development-release entries/tags after verifying the new artifact. Source history remains preserved. Users of a higher-numbered development build must install 1.0.0 explicitly; version-ordered update tools may not treat it as an upgrade.
 
 ## Installation / manual use / troubleshooting
 

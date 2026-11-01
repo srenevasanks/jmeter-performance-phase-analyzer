@@ -1,8 +1,8 @@
-# Proposed v1.1.2 — approval pending
+# Official release v1.0.0
 
-This document prepares a release; it does not publish one. Existing releases v1.1.0 and v1.1.1 remain unchanged. Version 1.1.2 is the next unused patch version and matches the accepted Maven implementation. Publishing v1.0.0 now would reverse version ordering.
+First official public release, explicitly reset to 1.0.0 by the maintainer. The development-release entries and tags are removed only after this release and its artifact are verified. Source commits and branches are preserved.
 
-## Proposed release notes
+## Release notes
 
 - Dynamic Thread Group discovery and shared selection across Dashboard, Phase Configuration and Live Metrics, preserving native tree order and group identity.
 - Automatic configuration by default; valid per-group Manual settings persist dynamically. All uses Automatic and disables Manual.
@@ -25,9 +25,9 @@ Exact-build macOS desktop verification remains pending; automated macOS CI is no
 
 ## Candidate artifact
 
-- Maven version / proposed tag: `1.1.2` / `v1.1.2`.
-- Filename: `jmeter-performance-phase-analyzer-1.1.2.jar`.
-- SHA-256: `7f5e5c7126eeb1027ca039fc3c285b6c3725e3202a45349561c2e988215db958`.
+- Maven version / tag: `1.0.0` / `v1.0.0`.
+- Filename: `jmeter-performance-phase-analyzer-1.0.0.jar`.
+- SHA-256: see the release-attached `SHA256SUMS.txt`.
 - Installation: one analyzer JAR in the complete JMeter 5.6.3 distribution's `lib/ext`, Java 17. Close JMeter before replacing an installed artifact; avoid duplicate analyzer copies.
 
-GitHub Release creation and tag creation require separate user approval after source publication and CI verification. No release asset is attached by this source-only publication.
+The prior source-publication CI passed on Windows and failed on Linux/macOS. Those failures remain unresolved and are disclosed; this version-only release does not claim that CI or actual macOS GUI verification passed.

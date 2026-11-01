@@ -1,4 +1,4 @@
-# Excel report, version 1.1.1
+# Excel report, version 1.0.0
 
 The approved Excel redesign preserves the seven worksheet names and the existing immutable snapshot calculations. It changes workbook presentation and Excel-specific handling of unavailable values, without altering capture, phase detection, aggregation, HTML or Swing behavior.
 
@@ -19,7 +19,7 @@ A newly generated workbook from a preserved actual Ultimate Thread Group local-m
 
 All seven sheets, the native chart, phase-window notes, percentage formatting and horizontal aggregate scrolling were opened and inspected in WPS Office 12.1.0.29162. The user reviewed and approved the design. Screenshots and raw validation outputs remain local and are not added to this repository. No new screenshots were created for publication.
 
-A separate standalone JMeter 5.6.3 / Java 17 smoke test using the final Excel implementation captured 226 successful local samples, produced one seven-sheet XLSX, and reconciled its TOTAL to native JTL. All 66 non-Excel class/template entries remained byte-identical to the verified implementation. Version 1.1.1 changes Maven release metadata without changing that approved exporter design.
+A separate standalone JMeter 5.6.3 / Java 17 smoke test using the final Excel implementation captured 226 successful local samples, produced one seven-sheet XLSX, and reconciled its TOTAL to native JTL. All 66 non-Excel class/template entries remained byte-identical to the verified implementation. Version 1.0.0 changes Maven release metadata without changing that approved exporter design.
 
 ## Limits
 
