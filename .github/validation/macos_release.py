@@ -158,7 +158,11 @@ def validate():
                         check('Excel '+phase+'/'+label+'/'+key,refs[label][key],actual)
                 check('Excel '+phase+' labels',sorted(refs),sorted(found))
             code_rows=cells(6)
-            excel_codes={str(int(row['A'])):int(row['C']) for row in code_rows if isinstance(row.get('A'),(int,float)) and str(int(row['A'])) in codes}
+            excel_codes={}
+            for row in code_rows:
+                raw=row.get('A')
+                code=str(int(raw)) if isinstance(raw,(int,float)) else str(raw)
+                if code in codes:excel_codes[code]=int(row['C'])
             check('Excel response-code counts',codes,excel_codes)
         summary['excel']='PASS' if all(c['pass'] for c in checks if c['scope'].startswith(('Excel','XLSX','Seven','One XLSX'))) else 'FAIL'
         summary['result']='PASS' if all(c['pass'] for c in checks) else 'FAIL'

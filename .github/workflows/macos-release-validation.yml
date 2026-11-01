@@ -1,8 +1,14 @@
 name: macOS published v1.0.0 JAR validation
 on:
   workflow_dispatch:
+    inputs:
+      evidence_run:
+        description: 'Optional prior run ID: reconcile its macOS artifacts without rerunning HTTP workload'
+        required: false
+        default: ''
 permissions:
   contents: read
+  actions: read
 jobs:
   released-jar:
     runs-on: macos-latest
@@ -48,6 +54,7 @@ jobs:
           cp downloads/jmeter-performance-phase-analyzer-1.0.0.jar "$RUNNER_TEMP/apache-jmeter-5.6.3/lib/ext/"
           cmp downloads/jmeter-performance-phase-analyzer-1.0.0.jar "$RUNNER_TEMP/apache-jmeter-5.6.3/lib/ext/jmeter-performance-phase-analyzer-1.0.0.jar"
       - name: Execute one 40-second local HTTP workload using released listener
+        if: inputs.evidence_run == ''
         run: |
           set -euo pipefail
           "$JMETER_HOME/bin/jmeter" -v >> evidence/environment.txt 2>&1
@@ -62,14 +69,29 @@ jobs:
           "$JMETER_HOME/bin/jmeter" -n -t evidence/macOS_Release_Validation.jmx -l evidence/results.jtl -j evidence/jmeter.log \
             -Jjmeter.save.saveservice.sent_bytes=true -Jjmeter.save.saveservice.assertion_results_failure_message=true \
             > evidence/jmeter-console.log 2>&1
+      - name: Retrieve existing macOS evidence for reconciliation only
+        if: inputs.evidence_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN: ${{ inputs.evidence_run }}
+        run: |
+          gh run view "$EVIDENCE_RUN" --repo "$GITHUB_REPOSITORY" --json workflowName --jq .workflowName | grep -Fx 'macOS published v1.0.0 JAR validation'
+          gh run download "$EVIDENCE_RUN" --repo "$GITHUB_REPOSITORY" --name macos-official-v1.0.0-validation --dir "$RUNNER_TEMP/prior-evidence"
+          cp -R "$RUNNER_TEMP/prior-evidence/"* evidence/
+          { sw_vers; uname -m; java -version; } > evidence/reconciliation-environment.txt 2>&1
+          echo "$EVIDENCE_RUN" > evidence/original-execution-run.txt
       - name: Export Excel through the released reporting API and reconcile actual JTL
+        env:
+          EVIDENCE_RUN: ${{ inputs.evidence_run }}
         run: |
           set -euo pipefail
-          CP="$JMETER_HOME/lib/*:$JMETER_HOME/lib/ext/*"
-          mkdir -p "$RUNNER_TEMP/release-export-fixture"
-          # Compile only this tiny API caller, never plugin sources or the plugin JAR.
-          javac -cp "$CP" -d "$RUNNER_TEMP/release-export-fixture" .github/validation/ReleasedJarExports.java
-          java -Djava.awt.headless=true -cp "$RUNNER_TEMP/release-export-fixture:$CP" ReleasedJarExports evidence/reports > evidence/plugin-loading.txt 2>&1
+          if [ -z "$EVIDENCE_RUN" ]; then
+            CP="$JMETER_HOME/lib/*:$JMETER_HOME/lib/ext/*"
+            mkdir -p "$RUNNER_TEMP/release-export-fixture"
+            # Compile only this tiny API caller, never plugin sources or the plugin JAR.
+            javac -cp "$CP" -d "$RUNNER_TEMP/release-export-fixture" .github/validation/ReleasedJarExports.java
+            java -Djava.awt.headless=true -cp "$RUNNER_TEMP/release-export-fixture:$CP" ReleasedJarExports evidence/reports > evidence/plugin-loading.txt 2>&1
+          fi
           python3 .github/validation/macos_release.py validate
       - name: Record failure summary if execution did not reach validation
         if: always()
